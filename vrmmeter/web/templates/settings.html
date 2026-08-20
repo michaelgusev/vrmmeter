@@ -1,0 +1,329 @@
+{% extends "base.html" %}
+
+{% block title %}Settings & VRM Configuration{% endblock %}
+
+{% block content %}
+<div class="max-w-5xl mx-auto space-y-6" x-data="{
+    vrmToken: '{{ vrm_token }}',
+    isSavingToken: false,
+    isTestingToken: false,
+    isDiscovering: false,
+    isSavingInst: false,
+    isBackfilling: false,
+    backfillStart: '',
+    backfillEnd: '',
+
+    saveToken() {
+        if (!this.vrmToken) {
+            showToast('Please enter a VRM token', 'error');
+            return;
+        }
+        this.isSavingToken = true;
+        fetch('/api/settings/vrm-token', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({ token: this.vrmToken })
+        })
+        .then(r => r.json())
+        .then(data => {
+            showToast(data.message || 'Token saved');
+        })
+        .catch(err => showToast('Failed to save token: ' + err, 'error'))
+        .finally(() => this.isSavingToken = false);
+    },
+
+    testToken() {
+        this.isTestingToken = true;
+        fetch('/api/settings/vrm-test', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({ token: this.vrmToken })
+        })
+        .then(r => r.json())
+        .then(data => {
+            if (data.success) {
+                showToast(`✓ ${data.message} (${data.sites_count} installation(s) found)`);
+            } else {
+                showToast(data.message, 'error');
+            }
+        })
+        .catch(err => showToast('Connection test failed: ' + err, 'error'))
+        .finally(() => this.isTestingToken = false);
+    },
+
+    discoverInstallations() {
+        this.isDiscovering = true;
+        fetch('/api/installations/discover', { method: 'POST' })
+        .then(r => r.json())
+        .then(data => {
+            showToast(`Discovered & Imported ${data.imported_count} new site(s), updated ${data.updated_count} site(s)`);
+            setTimeout(() => window.location.reload(), 1200);
+        })
+        .catch(err => showToast('Discovery failed: ' + err, 'error'))
+        .finally(() => this.isDiscovering = false);
+    },
+
+    saveInstallation(instId) {
+        this.isSavingInst = true;
+        const payload = {
+            name: document.getElementById('inst_name').value,
+            timezone: document.getElementById('inst_tz').value,
+            nominal_voltage_v: parseFloat(document.getElementById('inst_v_nom').value),
+            avr_idle_loss_kwh: parseFloat(document.getElementById('inst_idle').value),
+            loss_base_factor: parseFloat(document.getElementById('inst_k_base').value),
+            loss_voltage_factor: parseFloat(document.getElementById('inst_k_volt').value),
+            is_demo: document.getElementById('inst_is_demo').checked,
+        };
+
+        fetch('/api/installations/' + instId, {
+            method: 'PUT',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify(payload)
+        })
+        .then(r => r.json())
+        .then(data => {
+            showToast('Installation parameters updated & historical loss recalculated');
+            setTimeout(() => window.location.reload(), 1000);
+        })
+        .catch(err => showToast('Failed to update: ' + err, 'error'))
+        .finally(() => this.isSavingInst = false);
+    },
+
+    deleteInstallation(instId, instName) {
+        if (!confirm(`Are you sure you want to delete installation '${instName}'? All associated records and history will be deleted.`)) {
+            return;
+        }
+        fetch('/api/installations/' + instId, {
+            method: 'DELETE'
+        })
+        .then(r => {
+            if (r.ok || r.status === 204) {
+                showToast('Installation deleted successfully');
+                setTimeout(() => window.location.href = '/settings', 1000);
+            } else {
+                showToast('Failed to delete installation', 'error');
+            }
+        })
+        .catch(err => showToast('Delete failed: ' + err, 'error'));
+    },
+
+    triggerBackfill(instId) {
+        this.isBackfilling = true;
+        const payload = {
+            installation_id: instId,
+            start_time: this.backfillStart ? new Date(this.backfillStart).toISOString() : null,
+            end_time: this.backfillEnd ? new Date(this.backfillEnd).toISOString() : null,
+            force_recalculate_losses: true
+        };
+
+        fetch('/api/sync', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify(payload)
+        })
+        .then(r => r.json())
+        .then(data => {
+            showToast(data.message);
+            setTimeout(() => window.location.reload(), 1200);
+        })
+        .catch(err => showToast('Backfill failed: ' + err, 'error'))
+        .finally(() => this.isBackfilling = false);
+    }
+}">
+    <!-- Header -->
+    <div class="bg-slate-800/50 p-6 rounded-xl border border-slate-700/80">
+        <h1 class="text-2xl font-bold text-white flex items-center space-x-2">
+            <span>⚙️ System & Installation Settings</span>
+        </h1>
+        <p class="text-sm text-slate-400 mt-1">
+            Configure your Victron VRM authentication token, auto-discover all house installations,
+            and calibrate the AVR idle and voltage loss formula coefficients.
+        </p>
+    </div>
+
+    <!-- Section 1: Victron VRM Authentication & Auto-Discovery -->
+    <div class="bg-slate-800/40 rounded-xl border border-slate-700/80 p-6 shadow-md space-y-5">
+        <div class="border-b border-slate-700/80 pb-3">
+            <h2 class="text-lg font-bold text-white flex items-center space-x-2">
+                <span>🔑 Victron VRM Account & Site Discovery</span>
+            </h2>
+            <p class="text-xs text-slate-400 mt-1">
+                Enter your VRM Access Token generated in the VRM Portal (<em class="text-slate-300">Preferences > Integrations > Access Tokens</em>).
+                Stored securely in the database.
+            </p>
+        </div>
+
+        <div class="space-y-3">
+            <label class="block text-xs font-semibold uppercase tracking-wider text-slate-300">
+                VRM Access Token
+            </label>
+            <div class="flex flex-col sm:flex-row gap-3">
+                <input type="password" x-model="vrmToken" placeholder="Paste your Victron VRM Token (or type 'mock' for testing)"
+                       class="flex-grow bg-slate-950 border border-slate-700 rounded-lg px-4 py-2.5 text-white font-mono text-sm focus:ring-emerald-500 focus:border-emerald-500">
+                <button @click="saveToken()" :disabled="isSavingToken"
+                        class="bg-slate-700 hover:bg-slate-600 disabled:opacity-50 text-white font-medium px-4 py-2.5 rounded-lg text-sm transition">
+                    Save Token
+                </button>
+                <button @click="testToken()" :disabled="isTestingToken"
+                        class="bg-sky-600 hover:bg-sky-500 disabled:opacity-50 text-white font-medium px-4 py-2.5 rounded-lg text-sm shadow transition">
+                    Test Connection
+                </button>
+            </div>
+        </div>
+
+        <!-- One-Click Auto Discovery Action Box -->
+        <div class="bg-emerald-950/40 border border-emerald-500/40 rounded-xl p-5 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+            <div>
+                <h3 class="text-sm font-bold text-emerald-300">🔍 Auto-Discover & Import VRM Installations</h3>
+                <p class="text-xs text-slate-300 mt-0.5">
+                    Queries your VRM account and automatically adds all visible houses/sites with their site IDs, names, and timezones.
+                </p>
+            </div>
+            <button @click="discoverInstallations()" :disabled="isDiscovering"
+                    class="bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white text-sm font-medium px-5 py-2.5 rounded-lg shadow-lg transition whitespace-nowrap flex items-center space-x-2">
+                <span x-show="!isDiscovering">✨ Discover & Import Installations</span>
+                <span x-show="isDiscovering" class="animate-spin">⏳</span>
+                <span x-show="isDiscovering">Querying VRM...</span>
+            </button>
+        </div>
+    </div>
+
+    {% if selected_inst %}
+    <!-- Section 2: Active Installation Calibration & Loss Model Parameters -->
+    <div class="bg-slate-800/40 rounded-xl border border-slate-700/80 p-6 shadow-md space-y-5">
+        <div class="border-b border-slate-700/80 pb-3 flex justify-between items-center">
+            <div>
+                <h2 class="text-lg font-bold text-white flex items-center space-x-2">
+                    <span>⚡ Loss & AVR Calibration for: {{ selected_inst.name }}</span>
+                </h2>
+                <p class="text-xs text-slate-400 mt-1">
+                    Formula: <code class="font-mono text-emerald-400 bg-slate-950 px-2 py-0.5 rounded text-xs">E_corrected = (E_raw + k_idle) * (1 + k_base + k_voltage * |V_grid - V_nom| / V_nom)</code>
+                </p>
+            </div>
+            <span class="text-xs font-mono px-2 py-1 rounded bg-slate-900 text-slate-300 border border-slate-700">
+                Site ID: {{ selected_inst.vrm_site_id }}
+            </span>
+        </div>
+
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm">
+            <div>
+                <label class="block text-xs font-semibold uppercase tracking-wider text-slate-300 mb-1">
+                    Installation Display Name
+                </label>
+                <input type="text" id="inst_name" value="{{ selected_inst.name }}"
+                       class="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-white font-medium focus:ring-emerald-500 focus:border-emerald-500">
+            </div>
+
+            <div>
+                <label class="block text-xs font-semibold uppercase tracking-wider text-slate-300 mb-1">
+                    Installation Timezone (IANA)
+                </label>
+                <input type="text" id="inst_tz" value="{{ selected_inst.timezone }}"
+                       class="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-white font-mono focus:ring-emerald-500 focus:border-emerald-500">
+            </div>
+
+            <div>
+                <label class="block text-xs font-semibold uppercase tracking-wider text-amber-400 mb-1">
+                    Nominal Grid Voltage (V_nom, Volts)
+                </label>
+                <input type="number" step="1.0" id="inst_v_nom" value="{{ selected_inst.nominal_voltage_v }}"
+                       class="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-white font-mono focus:ring-amber-500 focus:border-amber-500">
+                <span class="text-[10px] text-slate-400">Target baseline voltage for this house (e.g. 220V or 230V).</span>
+            </div>
+
+            <div>
+                <label class="block text-xs font-semibold uppercase tracking-wider text-amber-400 mb-1">
+                    AVR Idle Self-Consumption (k_idle, kWh/h)
+                </label>
+                <input type="number" step="0.001" id="inst_idle" value="{{ selected_inst.avr_idle_loss_kwh }}"
+                       class="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-white font-mono focus:ring-amber-500 focus:border-amber-500">
+                <span class="text-[10px] text-slate-400">Added each hour even when inverter load is 0 (default: 0.015 kWh/h).</span>
+            </div>
+
+            <div>
+                <label class="block text-xs font-semibold uppercase tracking-wider text-emerald-400 mb-1">
+                    Base Proportional Loss Factor (k_base)
+                </label>
+                <input type="number" step="0.005" id="inst_k_base" value="{{ selected_inst.loss_base_factor }}"
+                       class="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-white font-mono focus:ring-emerald-500 focus:border-emerald-500">
+                <span class="text-[10px] text-slate-400">e.g. 0.03 for 3% baseline conversion loss.</span>
+            </div>
+
+            <div>
+                <label class="block text-xs font-semibold uppercase tracking-wider text-emerald-400 mb-1">
+                    Voltage Sensitivity Factor (k_voltage)
+                </label>
+                <input type="number" step="0.005" id="inst_k_volt" value="{{ selected_inst.loss_voltage_factor }}"
+                       class="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-white font-mono focus:ring-emerald-500 focus:border-emerald-500">
+                <span class="text-[10px] text-slate-400">Sensitivity multiplier for deviation from V_nom.</span>
+            </div>
+
+            <!-- Demo / Simulation Mode Flag -->
+            <div class="md:col-span-2 flex items-center justify-between p-3 bg-slate-950/80 rounded-lg border border-slate-800">
+                <div>
+                    <span class="text-xs font-bold text-amber-300 flex items-center gap-1.5">
+                        <span>🧪 Demo / Simulation Site</span>
+                        {% if selected_inst.is_demo %}
+                        <span class="bg-amber-500/20 text-amber-300 border border-amber-500/40 text-[10px] font-mono px-1.5 py-0.5 rounded">Active Demo</span>
+                        {% endif %}
+                    </span>
+                    <p class="text-[11px] text-slate-400 mt-0.5">
+                        When enabled, this site generates local simulated telemetry and avoids making live external API calls to Victron VRM.
+                    </p>
+                </div>
+                <label class="relative inline-flex items-center cursor-pointer">
+                    <input type="checkbox" id="inst_is_demo" {% if selected_inst.is_demo %}checked{% endif %} class="sr-only peer">
+                    <div class="w-11 h-6 bg-slate-700 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-amber-500"></div>
+                </label>
+            </div>
+        </div>
+
+        <div class="flex justify-between items-center pt-3 border-t border-slate-800">
+            <button @click="deleteInstallation('{{ selected_inst.id }}', '{{ selected_inst.name }}')"
+                    class="text-rose-400 hover:text-rose-300 text-xs font-medium px-3.5 py-2 rounded-lg border border-rose-900/60 hover:bg-rose-950/40 transition flex items-center space-x-1.5">
+                <span>🗑 Delete Installation</span>
+            </button>
+            <button @click="saveInstallation('{{ selected_inst.id }}')" :disabled="isSavingInst"
+                    class="bg-emerald-600 hover:bg-emerald-500 text-white font-medium text-sm px-6 py-2.5 rounded-lg shadow-lg transition">
+                Save & Recalculate Losses
+            </button>
+        </div>
+    </div>
+
+    <!-- Section 3: Historical Backfill Sync -->
+    <div class="bg-slate-800/40 rounded-xl border border-slate-700/80 p-6 shadow-md space-y-4">
+        <h2 class="text-base font-bold text-white flex items-center space-x-2">
+            <span>📅 Historical Data Backfill Sync</span>
+        </h2>
+        <p class="text-xs text-slate-400">
+            Download older historical data from Victron VRM for this installation to fill missing months.
+        </p>
+
+        <div class="grid grid-cols-1 sm:grid-cols-3 gap-4 items-end">
+            <div>
+                <label class="block text-xs font-semibold uppercase tracking-wider text-slate-300 mb-1">
+                    Start Date
+                </label>
+                <input type="date" x-model="backfillStart"
+                       class="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-white font-mono text-sm">
+            </div>
+            <div>
+                <label class="block text-xs font-semibold uppercase tracking-wider text-slate-300 mb-1">
+                    End Date
+                </label>
+                <input type="date" x-model="backfillEnd"
+                       class="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-white font-mono text-sm">
+            </div>
+            <div>
+                <button @click="triggerBackfill('{{ selected_inst.id }}')" :disabled="isBackfilling"
+                        class="w-full bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white text-sm font-medium px-4 py-2.5 rounded-lg shadow transition flex items-center justify-center space-x-2">
+                    <span x-show="!isBackfilling">⬇ Run Backfill Sync</span>
+                    <span x-show="isBackfilling" class="animate-spin">⏳</span>
+                    <span x-show="isBackfilling">Backfilling...</span>
+                </button>
+            </div>
+        </div>
+    </div>
+    {% endif %}
+</div>
+{% endblock %}

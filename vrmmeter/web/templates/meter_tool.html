@@ -1,0 +1,158 @@
+{% extends "base.html" %}
+
+{% block title %}Meter Reading Calculator{% endblock %}
+
+{% block content %}
+<div class="max-w-4xl mx-auto space-y-6" x-data="{
+    targetTime: '{{ now_iso }}',
+    isCalculating: false,
+    result: null,
+    error: null,
+    calculate() {
+        if (!this.targetTime) return;
+        this.isCalculating = true;
+        this.error = null;
+        this.result = null;
+
+        fetch('/api/calculate/meter', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({
+                installation_id: '{{ selected_inst.id if selected_inst else "" }}',
+                target_time: this.targetTime
+            })
+        })
+        .then(async r => {
+            if (!r.ok) {
+                const err = await r.json();
+                throw new Error(err.detail || 'Calculation failed');
+            }
+            return r.json();
+        })
+        .then(data => {
+            this.result = data;
+        })
+        .catch(err => {
+            this.error = err.message;
+        })
+        .finally(() => {
+            this.isCalculating = false;
+        });
+    }
+}">
+    <!-- Header -->
+    <div class="bg-slate-800/50 p-6 rounded-xl border border-slate-700/80">
+        <h1 class="text-2xl font-bold text-white flex items-center space-x-2">
+            <span>🔢 External Meter Calculator</span>
+        </h1>
+        <p class="text-sm text-slate-400 mt-1">
+            Calculate the exact external meter counter readings (Day and Night) for any arbitrary date and time.
+            The system automatically finds the most recent preceding reference reading and adds up the corrected hourly consumption since that reading.
+        </p>
+    </div>
+
+    <!-- Input Form -->
+    <div class="bg-slate-800/40 p-6 rounded-xl border border-slate-700/80 shadow-md space-y-4">
+        <div class="grid grid-cols-1 md:grid-cols-3 gap-4 items-end">
+            <div class="md:col-span-2">
+                <label class="block text-xs font-semibold uppercase tracking-wider text-slate-300 mb-2">
+                    Target Date & Time (Local Time: {{ selected_inst.timezone if selected_inst else 'UTC' }})
+                </label>
+                <input type="datetime-local" x-model="targetTime"
+                       class="w-full bg-slate-900 border border-slate-700 rounded-lg px-4 py-2.5 text-white font-mono focus:ring-2 focus:ring-emerald-500 focus:border-transparent">
+            </div>
+            <div>
+                <button @click="calculate()"
+                        :disabled="isCalculating || !targetTime"
+                        class="w-full bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white font-medium px-5 py-2.5 rounded-lg shadow-lg transition flex items-center justify-center space-x-2">
+                    <span x-show="!isCalculating">⚡ Calculate Reading</span>
+                    <span x-show="isCalculating" class="animate-spin">⏳</span>
+                    <span x-show="isCalculating">Calculating...</span>
+                </button>
+            </div>
+        </div>
+
+        <div class="flex items-center space-x-2 text-xs text-slate-400 pt-2">
+            <span>Quick presets:</span>
+            <button @click="targetTime = new Date().toISOString().slice(0, 16); calculate();" class="text-emerald-400 hover:underline">Now</button> •
+            <button @click="
+                const d = new Date();
+                targetTime = new Date(d.getFullYear(), d.getMonth(), 1, 0, 0).toISOString().slice(0, 16);
+                calculate();
+            " class="text-emerald-400 hover:underline">Start of Current Month</button> •
+            <button @click="
+                const d = new Date();
+                targetTime = new Date(d.getFullYear(), d.getMonth(), 0, 23, 59).toISOString().slice(0, 16);
+                calculate();
+            " class="text-emerald-400 hover:underline">End of Previous Month</button>
+        </div>
+    </div>
+
+    <!-- Error Box -->
+    <div x-show="error" x-cloak class="p-4 bg-rose-950/60 border border-rose-800 rounded-xl text-rose-200 text-sm">
+        <strong class="font-bold">Error:</strong> <span x-text="error"></span>
+    </div>
+
+    <!-- Calculation Results -->
+    <div x-show="result" x-cloak class="space-y-6">
+        <!-- Big Result Cards -->
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div class="bg-gradient-to-br from-amber-950/40 to-slate-900 border border-amber-500/40 p-6 rounded-xl shadow-lg">
+                <span class="text-xs font-semibold uppercase tracking-wider text-amber-400">Estimated Day Counter (T1)</span>
+                <div class="mt-2 flex items-baseline space-x-2">
+                    <span class="text-4xl font-extrabold font-mono text-white tracking-tight" x-text="result ? result.estimated_day_reading : ''"></span>
+                    <span class="text-sm font-medium text-slate-400">kWh</span>
+                </div>
+                <div class="mt-3 pt-3 border-t border-slate-800 text-xs text-slate-400 flex justify-between">
+                    <span>Baseline: <strong class="text-slate-300 font-mono" x-text="result && result.reference_reading ? result.reference_reading.day_reading_kwh : '0'"></strong> kWh</span>
+                    <span>+ Delta: <strong class="text-amber-400 font-mono" x-text="result ? result.delta_day_kwh : '0'"></strong> kWh</span>
+                </div>
+            </div>
+
+            <div class="bg-gradient-to-br from-indigo-950/40 to-slate-900 border border-indigo-500/40 p-6 rounded-xl shadow-lg">
+                <span class="text-xs font-semibold uppercase tracking-wider text-indigo-400">Estimated Night Counter (T2)</span>
+                <div class="mt-2 flex items-baseline space-x-2">
+                    <span class="text-4xl font-extrabold font-mono text-white tracking-tight" x-text="result ? result.estimated_night_reading : ''"></span>
+                    <span class="text-sm font-medium text-slate-400">kWh</span>
+                </div>
+                <div class="mt-3 pt-3 border-t border-slate-800 text-xs text-slate-400 flex justify-between">
+                    <span>Baseline: <strong class="text-slate-300 font-mono" x-text="result && result.reference_reading ? result.reference_reading.night_reading_kwh : '0'"></strong> kWh</span>
+                    <span>+ Delta: <strong class="text-indigo-400 font-mono" x-text="result ? result.delta_night_kwh : '0'"></strong> kWh</span>
+                </div>
+            </div>
+        </div>
+
+        <!-- Audit Trail Card -->
+        <div class="bg-slate-800/40 rounded-xl border border-slate-700/80 p-6 space-y-4">
+            <h3 class="text-sm font-bold uppercase tracking-wider text-slate-300">🔍 Calculation Audit Trail</h3>
+            
+            <div class="grid grid-cols-1 md:grid-cols-3 gap-4 text-xs">
+                <div class="bg-slate-900/80 p-4 rounded-lg border border-slate-800">
+                    <span class="text-slate-400 block mb-1">Reference Reading Used</span>
+                    <template x-if="result && result.reference_reading">
+                        <div>
+                            <span class="font-bold text-white font-mono" x-text="new Date(result.reference_reading.timestamp).toLocaleString()"></span>
+                            <span class="text-slate-400 block mt-1" x-text="result.reference_reading.notes || 'Manual reading'"></span>
+                        </div>
+                    </template>
+                    <template x-if="!result || !result.reference_reading">
+                        <span class="text-amber-400">None (using baseline 0.0)</span>
+                    </template>
+                </div>
+
+                <div class="bg-slate-900/80 p-4 rounded-lg border border-slate-800">
+                    <span class="text-slate-400 block mb-1">Period Calculated</span>
+                    <span class="font-bold text-white font-mono" x-text="result ? result.hours_calculated + ' hours' : ''"></span>
+                    <span class="text-slate-400 block mt-1">Total interval integrated</span>
+                </div>
+
+                <div class="bg-slate-900/80 p-4 rounded-lg border border-slate-800">
+                    <span class="text-slate-400 block mb-1">Total Corrected Energy</span>
+                    <span class="font-bold text-emerald-400 font-mono" x-text="result ? result.delta_total_kwh + ' kWh' : ''"></span>
+                    <span class="text-slate-400 block mt-1">Includes loss & AVR compensation</span>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

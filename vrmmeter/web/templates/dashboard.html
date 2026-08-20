@@ -1,0 +1,343 @@
+{% extends "base.html" %}
+
+{% block title %}Dashboard{% endblock %}
+
+{% block content %}
+{% if not selected_inst %}
+<div class="text-center py-16 bg-slate-800/40 rounded-2xl border border-slate-800 p-8 max-w-xl mx-auto my-8">
+    <div class="w-16 h-16 bg-emerald-500/10 text-emerald-400 rounded-full flex items-center justify-center mx-auto text-3xl mb-4">
+        ⚡
+    </div>
+    <h2 class="text-xl font-bold text-white mb-2">No Installations Configured</h2>
+    <p class="text-slate-400 text-sm mb-6">Connect your Victron VRM account to automatically discover and import all your house installations.</p>
+    <a href="/settings" class="inline-flex items-center px-5 py-2.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-medium text-sm shadow-lg transition">
+        Go to Settings & Discover VRM Sites →
+    </a>
+</div>
+{% else %}
+<div class="space-y-6" x-data="{ isSyncing: false }">
+    <!-- Top Bar: Installation Info & Date Filter -->
+    <div class="flex flex-col md:flex-row md:items-center justify-between gap-4 bg-slate-800/50 p-4 rounded-xl border border-slate-700/60 backdrop-blur">
+        <div>
+            <div class="flex items-center space-x-3">
+                <h1 class="text-2xl font-bold text-white tracking-tight">{{ selected_inst.name }}</h1>
+                <span class="px-2.5 py-0.5 rounded-full text-xs font-mono bg-emerald-950 text-emerald-400 border border-emerald-800">
+                    VRM Site: {{ selected_inst.vrm_site_id }}
+                </span>
+                {% if report and report.is_incomplete_month %}
+                <span class="px-2.5 py-0.5 rounded-full text-xs font-medium bg-amber-950/80 text-amber-300 border border-amber-800">
+                    ● Current / Incomplete Month
+                </span>
+                {% endif %}
+            </div>
+            <p class="text-xs text-slate-400 mt-1">
+                Tuned for <span class="text-slate-200 font-mono">{{ selected_inst.nominal_voltage_v }}V</span> nominal • 
+                AVR Idle loss: <span class="text-slate-200 font-mono">{{ selected_inst.avr_idle_loss_kwh }} kWh/h</span> • 
+                Base Loss: <span class="text-slate-200 font-mono">{{ (selected_inst.loss_base_factor * 100) | round(1) }}%</span> • 
+                Timezone: <span class="text-slate-200 font-mono">{{ selected_inst.timezone }}</span>
+            </p>
+        </div>
+
+        <!-- Month Filter & Sync Trigger -->
+        <div class="flex items-center space-x-3">
+            <form method="GET" action="/" class="flex items-center space-x-2">
+                <input type="hidden" name="installation_id" value="{{ selected_inst.id }}">
+                <select name="year" class="bg-slate-900 border border-slate-700 text-slate-200 text-sm rounded-lg px-3 py-2">
+                    {% for y in range(2023, 2030) %}
+                    <option value="{{ y }}" {% if y == year %}selected{% endif %}>{{ y }}</option>
+                    {% endfor %}
+                </select>
+                <select name="month" class="bg-slate-900 border border-slate-700 text-slate-200 text-sm rounded-lg px-3 py-2" onchange="this.form.submit()">
+                    {% set m_names = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"] %}
+                    {% for m_idx in range(1, 13) %}
+                    <option value="{{ m_idx }}" {% if m_idx == month %}selected{% endif %}>
+                        {{ m_names[m_idx - 1] }}
+                    </option>
+                    {% endfor %}
+                </select>
+                <button type="submit" class="bg-slate-700 hover:bg-slate-600 text-slate-200 px-3 py-2 rounded-lg text-sm font-medium">
+                    View
+                </button>
+            </form>
+
+            <button @click="
+                isSyncing = true;
+                fetch('/api/sync', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({ installation_id: '{{ selected_inst.id }}' })
+                })
+                .then(r => r.json())
+                .then(data => {
+                    showToast(data.message);
+                    setTimeout(() => window.location.reload(), 1000);
+                })
+                .catch(err => showToast('Sync failed: ' + err, 'error'))
+                .finally(() => isSyncing = false);
+            "
+            :disabled="isSyncing"
+            class="flex items-center space-x-2 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white text-sm font-medium px-4 py-2 rounded-lg shadow transition">
+                <span x-show="!isSyncing">🔄 Sync VRM</span>
+                <span x-show="isSyncing" class="animate-spin">⏳</span>
+                <span x-show="isSyncing">Syncing...</span>
+            </button>
+        </div>
+    </div>
+
+    {% if report %}
+    <!-- 4 Primary Metric Cards -->
+    <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+        <!-- Total Consumption Card -->
+        <div class="bg-slate-800/60 p-5 rounded-xl border border-slate-700/80 shadow-md">
+            <div class="flex justify-between items-start">
+                <span class="text-xs font-semibold uppercase tracking-wider text-slate-400">Total Consumption</span>
+                <span class="text-emerald-400 bg-emerald-950/80 px-2 py-0.5 rounded text-xs">⚡ Corrected</span>
+            </div>
+            <div class="mt-3 flex items-baseline space-x-2">
+                <span class="text-3xl font-extrabold text-white tracking-tight">{{ report.total_kwh }}</span>
+                <span class="text-sm font-medium text-slate-400">kWh</span>
+            </div>
+            <div class="mt-3 pt-3 border-t border-slate-700/60 flex justify-between text-xs text-slate-400">
+                <span>VRM Raw: <strong class="text-slate-300 font-mono">{{ report.raw_kwh }}</strong> kWh</span>
+                <span>Loss & AVR: <strong class="text-amber-400 font-mono">+{{ report.avr_and_system_loss_kwh }}</strong></span>
+            </div>
+        </div>
+
+        <!-- Day Zone Card -->
+        <div class="bg-slate-800/60 p-5 rounded-xl border border-slate-700/80 shadow-md">
+            <div class="flex justify-between items-start">
+                <span class="text-xs font-semibold uppercase tracking-wider text-amber-400">☀️ Day Tariff Zone</span>
+                <span class="text-xs font-mono text-slate-400">@ {{ report.day_rate }} {{ report.currency }}/kWh</span>
+            </div>
+            <div class="mt-3 flex items-baseline space-x-2">
+                <span class="text-3xl font-extrabold text-amber-300 tracking-tight">{{ report.day_kwh }}</span>
+                <span class="text-sm font-medium text-slate-400">kWh</span>
+            </div>
+            <div class="mt-3 pt-3 border-t border-slate-700/60 flex justify-between text-xs text-slate-400">
+                <span>Day Cost:</span>
+                <span class="text-amber-300 font-bold font-mono">{{ report.day_cost }} {{ report.currency }}</span>
+            </div>
+        </div>
+
+        <!-- Night Zone Card -->
+        <div class="bg-slate-800/60 p-5 rounded-xl border border-slate-700/80 shadow-md">
+            <div class="flex justify-between items-start">
+                <span class="text-xs font-semibold uppercase tracking-wider text-indigo-400">🌙 Night Tariff Zone</span>
+                <span class="text-xs font-mono text-slate-400">@ {{ report.night_rate }} {{ report.currency }}/kWh</span>
+            </div>
+            <div class="mt-3 flex items-baseline space-x-2">
+                <span class="text-3xl font-extrabold text-indigo-300 tracking-tight">{{ report.night_kwh }}</span>
+                <span class="text-sm font-medium text-slate-400">kWh</span>
+            </div>
+            <div class="mt-3 pt-3 border-t border-slate-700/60 flex justify-between text-xs text-slate-400">
+                <span>Night Cost:</span>
+                <span class="text-indigo-300 font-bold font-mono">{{ report.night_cost }} {{ report.currency }}</span>
+            </div>
+        </div>
+
+        <!-- Total Bill Amount Card -->
+        <div class="bg-gradient-to-br from-emerald-950/50 to-slate-800/80 p-5 rounded-xl border border-emerald-500/40 shadow-lg">
+            <div class="flex justify-between items-start">
+                <span class="text-xs font-semibold uppercase tracking-wider text-emerald-400">Total Month Bill</span>
+                <span class="text-xs font-mono px-2 py-0.5 rounded bg-emerald-900/60 text-emerald-300">{{ report.currency }}</span>
+            </div>
+            <div class="mt-3 flex items-baseline space-x-2">
+                <span class="text-3xl font-extrabold text-white tracking-tight">{{ report.total_bill }}</span>
+                <span class="text-sm font-medium text-emerald-400">{{ report.currency }}</span>
+            </div>
+            <div class="mt-3 pt-3 border-t border-slate-700/60 flex justify-between text-xs text-slate-400">
+                <span>Standing Fee: <strong class="text-slate-300 font-mono">{{ report.standing_charge }}</strong></span>
+                <span class="text-emerald-400 font-semibold">Total to Pay</span>
+            </div>
+        </div>
+    </div>
+
+    <!-- Estimated Physical External Meter Counters -->
+    <div class="bg-slate-800/40 rounded-xl border border-slate-700/80 p-6 shadow-md">
+        <div class="flex flex-col sm:flex-row sm:items-center justify-between pb-4 mb-4 border-b border-slate-700/80 gap-2">
+            <div>
+                <h2 class="text-lg font-bold text-white flex items-center space-x-2">
+                    <span>📟 Estimated External Meter Readings</span>
+                </h2>
+                <p class="text-xs text-slate-400 mt-0.5">
+                    Calculated forward from physical reference readings + corrected hourly consumption.
+                </p>
+            </div>
+            <div class="flex items-center space-x-2">
+                <a href="/meter-tool?installation_id={{ selected_inst.id }}" class="text-xs bg-slate-700 hover:bg-slate-600 text-slate-200 px-3 py-1.5 rounded-lg font-medium">
+                    🔢 Point-in-Time Calculator →
+                </a>
+                <a href="/readings?installation_id={{ selected_inst.id }}" class="text-xs bg-emerald-600/80 hover:bg-emerald-600 text-white px-3 py-1.5 rounded-lg font-medium">
+                    + Add Reference Reading
+                </a>
+            </div>
+        </div>
+
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+            <!-- Start of Month Meter Reading -->
+            <div class="bg-slate-900/80 rounded-xl p-5 border border-slate-800">
+                <div class="flex justify-between items-center mb-3">
+                    <span class="text-xs font-semibold uppercase tracking-wider text-slate-400">Start of Month (1st {{ report.month_name }})</span>
+                    <span class="text-xs font-mono text-sky-400">00:00:00 Local</span>
+                </div>
+                {% if report.start_meter_day is not none %}
+                <div class="grid grid-cols-2 gap-4">
+                    <div class="bg-slate-950 p-3 rounded-lg border border-slate-800/80">
+                        <span class="text-xs text-amber-400 font-medium block">☀️ Day Counter (T1)</span>
+                        <span class="text-2xl font-mono font-bold text-white mt-1 block">{{ report.start_meter_day }}</span>
+                        <span class="text-[10px] text-slate-500">kWh</span>
+                    </div>
+                    <div class="bg-slate-950 p-3 rounded-lg border border-slate-800/80">
+                        <span class="text-xs text-indigo-400 font-medium block">🌙 Night Counter (T2)</span>
+                        <span class="text-2xl font-mono font-bold text-white mt-1 block">{{ report.start_meter_night }}</span>
+                        <span class="text-[10px] text-slate-500">kWh</span>
+                    </div>
+                </div>
+                {% else %}
+                <div class="text-center py-4 text-xs text-amber-400 bg-amber-950/30 rounded-lg border border-amber-900/40">
+                    ⚠ No reference meter readings entered yet. <a href="/readings?installation_id={{ selected_inst.id }}" class="underline font-semibold">Enter a reference reading</a> to calibrate counters.
+                </div>
+                {% endif %}
+            </div>
+
+            <!-- End of Month / Current Meter Reading -->
+            <div class="bg-slate-900/80 rounded-xl p-5 border border-slate-800">
+                <div class="flex justify-between items-center mb-3">
+                    <span class="text-xs font-semibold uppercase tracking-wider text-slate-400">
+                        {% if report.is_incomplete_month %}Current Time (Live Projection){% else %}End of Month Reading{% endif %}
+                    </span>
+                    <span class="text-xs font-mono text-emerald-400">
+                        {% if report.is_incomplete_month %}Now{% else %}23:59:59 Local{% endif %}
+                    </span>
+                </div>
+                {% if report.end_meter_day is not none %}
+                <div class="grid grid-cols-2 gap-4">
+                    <div class="bg-slate-950 p-3 rounded-lg border border-slate-800/80">
+                        <span class="text-xs text-amber-400 font-medium block">☀️ Day Counter (T1)</span>
+                        <span class="text-2xl font-mono font-bold text-white mt-1 block">{{ report.end_meter_day }}</span>
+                        <span class="text-[10px] text-slate-500">kWh</span>
+                    </div>
+                    <div class="bg-slate-950 p-3 rounded-lg border border-slate-800/80">
+                        <span class="text-xs text-indigo-400 font-medium block">🌙 Night Counter (T2)</span>
+                        <span class="text-2xl font-mono font-bold text-white mt-1 block">{{ report.end_meter_night }}</span>
+                        <span class="text-[10px] text-slate-500">kWh</span>
+                    </div>
+                </div>
+                {% else %}
+                <div class="text-center py-4 text-xs text-amber-400 bg-amber-950/30 rounded-lg border border-amber-900/40">
+                    ⚠ No reference meter readings entered yet. <a href="/readings?installation_id={{ selected_inst.id }}" class="underline font-semibold">Enter a reference reading</a> to calibrate counters.
+                </div>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+
+    <!-- Consumption Breakdown Chart -->
+    <div class="bg-slate-800/40 rounded-xl border border-slate-700/80 p-6 shadow-md">
+        <h2 class="text-lg font-bold text-white mb-4">📈 Daily Consumption & Tariff Split</h2>
+        <div class="h-72 w-full">
+            <canvas id="dailyChart"></canvas>
+        </div>
+    </div>
+
+    <!-- Daily Breakdown Table -->
+    <div class="bg-slate-800/40 rounded-xl border border-slate-700/80 overflow-hidden shadow-md">
+        <div class="px-6 py-4 border-b border-slate-700/80 flex justify-between items-center">
+            <h2 class="text-lg font-bold text-white">📋 Daily Energy Log ({{ report.month_name }} {{ report.year }})</h2>
+            <span class="text-xs text-slate-400">{{ report.daily_breakdown | length }} days recorded</span>
+        </div>
+        <div class="overflow-x-auto">
+            <table class="min-w-full divide-y divide-slate-700 text-sm text-left">
+                <thead class="bg-slate-900/70 text-slate-400 text-xs font-semibold uppercase">
+                    <tr>
+                        <th class="px-6 py-3">Date</th>
+                        <th class="px-6 py-3 text-right">☀️ Day (kWh)</th>
+                        <th class="px-6 py-3 text-right">🌙 Night (kWh)</th>
+                        <th class="px-6 py-3 text-right">Total (kWh)</th>
+                        <th class="px-6 py-3 text-right">VRM Raw</th>
+                        <th class="px-6 py-3 text-right">Loss / AVR</th>
+                        <th class="px-6 py-3 text-right">Avg Voltage</th>
+                    </tr>
+                </thead>
+                <tbody class="divide-y divide-slate-700/50 text-slate-200">
+                    {% for row in report.daily_breakdown %}
+                    <tr class="hover:bg-slate-800/50 transition">
+                        <td class="px-6 py-3 font-mono font-medium text-slate-300">{{ row.date }}</td>
+                        <td class="px-6 py-3 text-right font-mono text-amber-300">{{ row.day_kwh }}</td>
+                        <td class="px-6 py-3 text-right font-mono text-indigo-300">{{ row.night_kwh }}</td>
+                        <td class="px-6 py-3 text-right font-mono font-bold text-white">{{ row.total_kwh }}</td>
+                        <td class="px-6 py-3 text-right font-mono text-slate-400">{{ row.raw_kwh }}</td>
+                        <td class="px-6 py-3 text-right font-mono text-amber-400">+{{ row.loss_kwh }}</td>
+                        <td class="px-6 py-3 text-right font-mono text-slate-300">{{ row.avg_voltage_v }} V</td>
+                    </tr>
+                    {% else %}
+                    <tr>
+                        <td colspan="7" class="px-6 py-8 text-center text-slate-400 text-sm">
+                            No hourly consumption records found for this month. Click <strong>🔄 Sync VRM</strong> to download data.
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+    {% endif %}
+</div>
+{% endif %}
+{% endblock %}
+
+{% block scripts %}
+{% if report and report.daily_breakdown %}
+<script>
+    document.addEventListener('DOMContentLoaded', () => {
+        const labels = [{% for r in report.daily_breakdown %}'{{ r.date }}'{% if not loop.last %}, {% endif %}{% endfor %}];
+        const dayData = [{% for r in report.daily_breakdown %}{{ r.day_kwh }}{% if not loop.last %}, {% endif %}{% endfor %}];
+        const nightData = [{% for r in report.daily_breakdown %}{{ r.night_kwh }}{% if not loop.last %}, {% endif %}{% endfor %}];
+
+        const ctx = document.getElementById('dailyChart').getContext('2d');
+        new Chart(ctx, {
+            type: 'bar',
+            data: {
+                labels: labels,
+                datasets: [
+                    {
+                        label: 'Day Tariff (kWh)',
+                        data: dayData,
+                        backgroundColor: '#f59e0b',
+                        borderRadius: 4,
+                    },
+                    {
+                        label: 'Night Tariff (kWh)',
+                        data: nightData,
+                        backgroundColor: '#6366f1',
+                        borderRadius: 4,
+                    }
+                ]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                scales: {
+                    x: {
+                        stacked: true,
+                        grid: { color: 'rgba(255, 255, 255, 0.05)' },
+                        ticks: { color: '#94a3b8' }
+                    },
+                    y: {
+                        stacked: true,
+                        grid: { color: 'rgba(255, 255, 255, 0.05)' },
+                        ticks: { color: '#94a3b8' },
+                        title: { display: true, text: 'kWh', color: '#94a3b8' }
+                    }
+                },
+                plugins: {
+                    legend: {
+                        labels: { color: '#cbd5e1' }
+                    }
+                }
+            }
+        });
+    });
+</script>
+{% endif %}
+{% endblock %}

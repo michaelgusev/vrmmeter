@@ -1,0 +1,148 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}VRM Meter{% endblock %} - Power & Billing Estimator</title>
+    <!-- Tailwind CSS CDN -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        brand: {
+                            50: '#f0fdf4',
+                            100: '#dcfce7',
+                            500: '#22c55e',
+                            600: '#16a34a',
+                            700: '#15803d',
+                            900: '#14532d',
+                        },
+                        victron: {
+                            blue: '#005487',
+                            dark: '#003657',
+                            accent: '#f59e0b',
+                        }
+                    }
+                }
+            }
+        }
+    </script>
+    <!-- Alpine.js -->
+    <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
+    <!-- Chart.js -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        [x-cloak] { display: none !important; }
+    </style>
+</head>
+<body class="bg-slate-900 text-slate-100 min-h-screen flex flex-col antialiased">
+    <!-- Navigation Bar -->
+    <nav class="bg-slate-950 border-b border-slate-800 sticky top-0 z-50">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+            <div class="flex items-center justify-between h-16">
+                <!-- Logo & Brand -->
+                <div class="flex items-center space-x-3">
+                    <a href="/" class="flex items-center space-x-2">
+                        <div class="w-9 h-9 rounded-lg bg-gradient-to-tr from-sky-600 to-emerald-500 flex items-center justify-center font-bold text-white shadow-lg">
+                            ⚡
+                        </div>
+                        <div>
+                            <span class="font-bold text-lg tracking-tight text-white">VRM<span class="text-emerald-400">Meter</span></span>
+                            <span class="text-xs text-slate-400 block -mt-1 font-mono">Victron Billing & Estimator</span>
+                        </div>
+                    </a>
+                </div>
+
+                <!-- Navigation Tabs -->
+                <div class="hidden md:flex items-center space-x-1">
+                    <a href="/{% if selected_inst %}?installation_id={{ selected_inst.id }}{% endif %}"
+                       class="px-3 py-2 rounded-md text-sm font-medium transition-colors {% if active_tab == 'dashboard' %}bg-slate-800 text-emerald-400 border border-emerald-500/30{% else %}text-slate-300 hover:bg-slate-800 hover:text-white{% endif %}">
+                        📊 Dashboard
+                    </a>
+                    <a href="/meter-tool{% if selected_inst %}?installation_id={{ selected_inst.id }}{% endif %}"
+                       class="px-3 py-2 rounded-md text-sm font-medium transition-colors {% if active_tab == 'meter-tool' %}bg-slate-800 text-emerald-400 border border-emerald-500/30{% else %}text-slate-300 hover:bg-slate-800 hover:text-white{% endif %}">
+                        🔢 Meter Calculator
+                    </a>
+                    <a href="/readings{% if selected_inst %}?installation_id={{ selected_inst.id }}{% endif %}"
+                       class="px-3 py-2 rounded-md text-sm font-medium transition-colors {% if active_tab == 'readings' %}bg-slate-800 text-emerald-400 border border-emerald-500/30{% else %}text-slate-300 hover:bg-slate-800 hover:text-white{% endif %}">
+                        📖 Reference Readings
+                    </a>
+                    <a href="/tariffs{% if selected_inst %}?installation_id={{ selected_inst.id }}{% endif %}"
+                       class="px-3 py-2 rounded-md text-sm font-medium transition-colors {% if active_tab == 'tariffs' %}bg-slate-800 text-emerald-400 border border-emerald-500/30{% else %}text-slate-300 hover:bg-slate-800 hover:text-white{% endif %}">
+                        💶 Tariffs & Prices
+                    </a>
+                    <a href="/telemetry{% if selected_inst %}?installation_id={{ selected_inst.id }}{% endif %}"
+                       class="px-3 py-2 rounded-md text-sm font-medium transition-colors {% if active_tab == 'telemetry' %}bg-slate-800 text-emerald-400 border border-emerald-500/30{% else %}text-slate-300 hover:bg-slate-800 hover:text-white{% endif %}">
+                        🔌 Grid Voltage Telemetry
+                    </a>
+                    <a href="/settings{% if selected_inst %}?installation_id={{ selected_inst.id }}{% endif %}"
+                       class="px-3 py-2 rounded-md text-sm font-medium transition-colors {% if active_tab == 'settings' %}bg-slate-800 text-emerald-400 border border-emerald-500/30{% else %}text-slate-300 hover:bg-slate-800 hover:text-white{% endif %}">
+                        ⚙️ Settings
+                    </a>
+                </div>
+
+                <!-- Installation Switcher & Actions -->
+                <div class="flex items-center space-x-3">
+                    {% if installations %}
+                    <form method="GET" class="flex items-center">
+                        <select name="installation_id" onchange="this.form.submit()"
+                                class="bg-slate-800 border border-slate-700 text-slate-200 text-xs rounded-lg px-3 py-2 focus:ring-emerald-500 focus:border-emerald-500 font-medium">
+                            {% for inst in installations %}
+                            <option value="{{ inst.id }}" {% if selected_inst and selected_inst.id == inst.id %}selected{% endif %}>
+                                🏠 {{ inst.name }} (Site {{ inst.vrm_site_id }}){% if inst.is_demo %} [DEMO]{% endif %}
+                            </option>
+                            {% endfor %}
+                        </select>
+                        {% if year %}<input type="hidden" name="year" value="{{ year }}">{% endif %}
+                        {% if month %}<input type="hidden" name="month" value="{{ month }}">{% endif %}
+                    </form>
+                    {% if selected_inst %}
+                    <span class="hidden lg:inline-flex items-center px-2.5 py-1 rounded-full text-xs font-mono bg-sky-950/80 text-sky-300 border border-sky-800">
+                        🕒 {{ selected_inst.timezone }}
+                    </span>
+                    {% endif %}
+                    {% else %}
+                    <a href="/settings" class="text-xs bg-emerald-600 hover:bg-emerald-500 text-white px-3 py-1.5 rounded-lg font-medium shadow">
+                        + Setup VRM Token
+                    </a>
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+    </nav>
+
+    <!-- Global Toast / Notification Container -->
+    <div id="toast-container" class="fixed bottom-4 right-4 z-50 flex flex-col space-y-2 pointer-events-none"></div>
+
+    <!-- Main Content -->
+    <main class="flex-grow max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-6">
+        {% block content %}{% endblock %}
+    </main>
+
+    <!-- Footer -->
+    <footer class="bg-slate-950 border-t border-slate-800/80 py-4 text-center text-xs text-slate-500">
+        <div class="max-w-7xl mx-auto px-4 flex flex-col sm:flex-row justify-between items-center space-y-2 sm:space-y-0">
+            <div>VRM Meter • Autonomous Victron Billing & Loss Compensation</div>
+            <div>Victron JSON API v2 Integration</div>
+        </div>
+    </footer>
+
+    <script>
+        function showToast(message, type = 'success') {
+            const container = document.getElementById('toast-container');
+            const toast = document.createElement('div');
+            const bgClass = type === 'success' ? 'bg-emerald-600 border-emerald-500' : 'bg-rose-600 border-rose-500';
+            toast.className = `${bgClass} text-white px-4 py-3 rounded-lg shadow-xl border text-sm font-medium pointer-events-auto transform transition-all duration-300 flex items-center space-x-2`;
+            toast.innerHTML = `<span>${type === 'success' ? '✓' : '⚠'}</span> <span>${message}</span>`;
+            container.appendChild(toast);
+            setTimeout(() => {
+                toast.style.opacity = '0';
+                setTimeout(() => toast.remove(), 300);
+            }, 4000);
+        }
+    </script>
+    {% block scripts %}{% endblock %}
+</body>
+</html>

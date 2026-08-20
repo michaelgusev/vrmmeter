@@ -1,0 +1,19 @@
+services:
+  vrmmeter:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: vrmmeter
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./data:/app/data
+    environment:
+      - HOST=0.0.0.0
+      - PORT=8000
+      - SYNC_INTERVAL_MINUTES=30
+      - SCHEDULER_ENABLED=true
+    env_file:
+      - path: .env
+        required: false

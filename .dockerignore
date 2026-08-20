@@ -1,0 +1,16 @@
+.git
+.gitignore
+.venv
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache
+.idea
+.vscode
+*.egg-info
+dist
+build
+data/*.db
+data/*.db-wal
+data/*.db-shm

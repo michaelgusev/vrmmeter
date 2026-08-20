@@ -1,0 +1,178 @@
+{% extends "base.html" %}
+
+{% block title %}Reference Meter Readings{% endblock %}
+
+{% block content %}
+<div class="max-w-5xl mx-auto space-y-6" x-data="{
+    showAddModal: false,
+    timestamp: '{{ now_iso }}',
+    dayReading: '',
+    nightReading: '',
+    notes: '',
+    isSubmitting: false,
+    submitReading() {
+        if (!this.dayReading || !this.nightReading || !this.timestamp) {
+            showToast('Please fill in all required fields', 'error');
+            return;
+        }
+        this.isSubmitting = true;
+        fetch('/api/readings', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({
+                installation_id: '{{ selected_inst.id if selected_inst else "" }}',
+                timestamp: this.timestamp,
+                day_reading_kwh: parseFloat(this.dayReading),
+                night_reading_kwh: parseFloat(this.nightReading),
+                is_reference: true,
+                notes: this.notes
+            })
+        })
+        .then(r => r.json())
+        .then(data => {
+            showToast('Reference reading saved successfully');
+            setTimeout(() => window.location.reload(), 800);
+        })
+        .catch(err => showToast('Failed to save reading: ' + err, 'error'))
+        .finally(() => this.isSubmitting = false);
+    },
+    deleteReading(id) {
+        if (!confirm('Are you sure you want to delete this reference reading?')) return;
+        fetch('/api/readings/' + id, { method: 'DELETE' })
+        .then(() => {
+            showToast('Reading deleted');
+            setTimeout(() => window.location.reload(), 500);
+        })
+        .catch(err => showToast('Failed to delete: ' + err, 'error'));
+    }
+}">
+    <!-- Header -->
+    <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-4 bg-slate-800/50 p-6 rounded-xl border border-slate-700/80">
+        <div>
+            <h1 class="text-2xl font-bold text-white flex items-center space-x-2">
+                <span>📖 Reference Meter Readings</span>
+            </h1>
+            <p class="text-sm text-slate-400 mt-1">
+                Store physical readings manually read from the utility meter outside the house.
+                Calculations for any period are anchored to the last available reading preceding that period.
+            </p>
+        </div>
+        <div>
+            <button @click="showAddModal = true"
+                    class="bg-emerald-600 hover:bg-emerald-500 text-white text-sm font-medium px-4 py-2.5 rounded-lg shadow-lg transition flex items-center space-x-2">
+                <span>+ Add Reference Reading</span>
+            </button>
+        </div>
+    </div>
+
+    <!-- Readings Table -->
+    <div class="bg-slate-800/40 rounded-xl border border-slate-700/80 overflow-hidden shadow-md">
+        <div class="px-6 py-4 border-b border-slate-700/80 flex justify-between items-center">
+            <h2 class="text-base font-bold text-white">Saved Reference Readings History</h2>
+            <span class="text-xs text-slate-400">{{ readings | length }} reading(s)</span>
+        </div>
+        <div class="overflow-x-auto">
+            <table class="min-w-full divide-y divide-slate-700 text-sm text-left">
+                <thead class="bg-slate-900/70 text-slate-400 text-xs font-semibold uppercase">
+                    <tr>
+                        <th class="px-6 py-3">Timestamp (UTC / Local)</th>
+                        <th class="px-6 py-3 text-right">☀️ Day Reading (kWh)</th>
+                        <th class="px-6 py-3 text-right">🌙 Night Reading (kWh)</th>
+                        <th class="px-6 py-3 text-right">Total Counter (kWh)</th>
+                        <th class="px-6 py-3">Notes</th>
+                        <th class="px-6 py-3 text-center">Actions</th>
+                    </tr>
+                </thead>
+                <tbody class="divide-y divide-slate-700/50 text-slate-200">
+                    {% for r in readings %}
+                    <tr class="hover:bg-slate-800/50 transition">
+                        <td class="px-6 py-3 font-mono text-slate-300">
+                            {{ r.timestamp.strftime('%Y-%m-%d %H:%M:%S') }}
+                        </td>
+                        <td class="px-6 py-3 text-right font-mono font-bold text-amber-300">
+                            {{ r.day_reading_kwh }}
+                        </td>
+                        <td class="px-6 py-3 text-right font-mono font-bold text-indigo-300">
+                            {{ r.night_reading_kwh }}
+                        </td>
+                        <td class="px-6 py-3 text-right font-mono font-bold text-white">
+                            {{ (r.day_reading_kwh + r.night_reading_kwh) | round(2) }}
+                        </td>
+                        <td class="px-6 py-3 text-slate-400 text-xs">
+                            {{ r.notes or '—' }}
+                        </td>
+                        <td class="px-6 py-3 text-center">
+                            <button @click="deleteReading({{ r.id }})"
+                                    class="text-rose-400 hover:text-rose-300 text-xs px-2 py-1 bg-rose-950/50 rounded border border-rose-900/50 hover:bg-rose-900 transition">
+                                Delete
+                            </button>
+                        </td>
+                    </tr>
+                    {% else %}
+                    <tr>
+                        <td colspan="6" class="px-6 py-12 text-center text-slate-400 text-sm">
+                            No reference readings recorded yet. Click <strong>+ Add Reference Reading</strong> to add your first physical reading.
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+    <!-- Add Reading Modal -->
+    <div x-show="showAddModal" x-cloak class="fixed inset-0 z-50 overflow-y-auto flex items-center justify-center bg-black/70 backdrop-blur-sm p-4">
+        <div @click.away="showAddModal = false" class="bg-slate-900 border border-slate-700 rounded-2xl max-w-lg w-full p-6 shadow-2xl space-y-5">
+            <div class="flex justify-between items-center border-b border-slate-800 pb-3">
+                <h3 class="text-lg font-bold text-white">Add Manual Meter Reading</h3>
+                <button @click="showAddModal = false" class="text-slate-400 hover:text-white">✕</button>
+            </div>
+
+            <div class="space-y-4">
+                <div>
+                    <label class="block text-xs font-semibold uppercase tracking-wider text-slate-300 mb-1">
+                        Date & Time of Reading
+                    </label>
+                    <input type="datetime-local" x-model="timestamp"
+                           class="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-white font-mono text-sm focus:ring-emerald-500 focus:border-emerald-500">
+                </div>
+
+                <div class="grid grid-cols-2 gap-4">
+                    <div>
+                        <label class="block text-xs font-semibold uppercase tracking-wider text-amber-400 mb-1">
+                            ☀️ Day Counter (T1, kWh)
+                        </label>
+                        <input type="number" step="0.1" x-model="dayReading" placeholder="e.g. 14250.5"
+                               class="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-white font-mono text-sm focus:ring-amber-500 focus:border-amber-500">
+                    </div>
+                    <div>
+                        <label class="block text-xs font-semibold uppercase tracking-wider text-indigo-400 mb-1">
+                            🌙 Night Counter (T2, kWh)
+                        </label>
+                        <input type="number" step="0.1" x-model="nightReading" placeholder="e.g. 8410.2"
+                               class="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-white font-mono text-sm focus:ring-indigo-500 focus:border-indigo-500">
+                    </div>
+                </div>
+
+                <div>
+                    <label class="block text-xs font-semibold uppercase tracking-wider text-slate-300 mb-1">
+                        Notes (Optional)
+                    </label>
+                    <input type="text" x-model="notes" placeholder="e.g. Monthly self-reading / Utility bill check"
+                           class="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-white text-sm focus:ring-emerald-500 focus:border-emerald-500">
+                </div>
+            </div>
+
+            <div class="flex justify-end space-x-3 pt-3 border-t border-slate-800">
+                <button @click="showAddModal = false" class="px-4 py-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 text-sm font-medium">
+                    Cancel
+                </button>
+                <button @click="submitReading()" :disabled="isSubmitting"
+                        class="px-5 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-sm font-medium shadow transition">
+                    Save Reading
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
