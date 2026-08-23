@@ -51,6 +51,17 @@ async def test_html_views_render(override_db, db_session, sample_installation: I
         assert res_s.status_code == 200
         assert "VRM" in res_s.text
 
+        # Favicon
+        res_f1 = await client.get("/favicon.svg")
+        assert res_f1.status_code == 200
+        assert "image/svg+xml" in res_f1.headers["content-type"]
+        assert "<svg" in res_f1.text
+
+        res_f2 = await client.get("/favicon.ico")
+        assert res_f2.status_code == 200
+        assert "<svg" in res_f2.text
+
+
 
 @pytest.mark.asyncio
 async def test_api_installations_crud(override_db, db_session):

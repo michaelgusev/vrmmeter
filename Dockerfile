@@ -26,8 +26,21 @@ COPY README.md /app/
 # Install the application into the venv
 RUN uv sync --frozen --no-dev
 
-# Create data directory for SQLite database persistence
-RUN mkdir -p /app/data
+# Install gosu for lightweight runtime privilege dropping
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends gosu && \
+    rm -rf /var/lib/apt/lists/*
+
+# Pre-create data directory and default vrmmeter user/group
+RUN mkdir -p /app/data && \
+    groupadd -r vrmmeter -g 1000 && \
+    useradd -r -u 1000 -g vrmmeter -d /app -s /sbin/nologin vrmmeter && \
+    chown -R vrmmeter:vrmmeter /app
+
+# Copy entrypoint script
+COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
+RUN sed -i 's/\r$//' /usr/local/bin/docker-entrypoint.sh && \
+    chmod +x /usr/local/bin/docker-entrypoint.sh
 
 # Expose port
 EXPOSE 8000
@@ -35,5 +48,10 @@ EXPOSE 8000
 # Volume for persistent SQLite DB and telemetry storage
 VOLUME ["/app/data"]
 
-# Default entrypoint
+# Entrypoint drops root privileges to configured PUID:PGID
+ENTRYPOINT ["/usr/local/bin/docker-entrypoint.sh"]
+
+# Default command
 CMD ["python", "-m", "vrmmeter.main"]
+
+

@@ -1,13 +1,18 @@
+import logging
+import zoneinfo
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from vrmmeter.db.models import HourlyConsumption, Installation, SyncHistory, TelemetryParameter
+from vrmmeter.services.calculator import ensure_utc
 from vrmmeter.services.installer_importer import get_stored_vrm_token
 from vrmmeter.services.loss_model import calculate_hourly_loss
 from vrmmeter.services.tariff_engine import get_tariff_zone
 from vrmmeter.services.vrm_client import BaseVrmClient, get_vrm_client
+
+logger = logging.getLogger("vrmmeter.sync")
 
 
 async def sync_installation(
@@ -21,9 +26,19 @@ async def sync_installation(
     Synchronize VRM stats for a single installation.
     If start_dt is None, incrementally syncs from last known record in DB.
     """
-    now = datetime.now(timezone.utc)
+    try:
+        inst_tz = zoneinfo.ZoneInfo(installation.timezone)
+    except Exception:
+        inst_tz = timezone.utc
+
+    now_utc = datetime.now(timezone.utc)
+
     if end_dt is None:
-        end_dt = now
+        # Extend end_dt to cover through the end of the installation's current local day (+24h buffer)
+        # to ensure timezones ahead of UTC or late hourly records are included in the query window
+        end_dt = now_utc + timedelta(hours=24)
+    else:
+        end_dt = ensure_utc(end_dt)
 
     if start_dt is None:
         # Check latest record timestamp in DB
@@ -34,10 +49,12 @@ async def sync_installation(
         max_ts = res.scalar()
         if max_ts:
             # Re-fetch previous 2 hours to capture updated VRM stats
-            start_dt = max_ts - timedelta(hours=2)
+            start_dt = ensure_utc(max_ts) - timedelta(hours=2)
         else:
-            # Default to 30 days back
-            start_dt = now - timedelta(days=30)
+            # Default to 35 days back to cover complete billing cycle
+            start_dt = now_utc - timedelta(days=35)
+    else:
+        start_dt = ensure_utc(start_dt)
 
     if start_dt > end_dt:
         start_dt = end_dt - timedelta(hours=24)
@@ -45,7 +62,7 @@ async def sync_installation(
     # Initialize sync history log
     sync_log = SyncHistory(
         installation_id=installation.id,
-        sync_started_at=now,
+        sync_started_at=now_utc,
         status="RUNNING",
         records_synced=0,
     )
@@ -186,8 +203,8 @@ async def sync_all_active_installations(session: AsyncSession) -> int:
                 vrm_client=client_to_use,
             )
             total_records += records
-        except Exception:
-            # Continue syncing remaining installations
+        except Exception as e:
+            logger.error(f"Sync failed for installation {inst.name} ({inst.id}): {e}", exc_info=True)
             continue
 
     return total_records

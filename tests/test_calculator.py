@@ -186,3 +186,54 @@ async def test_august_month_boundary_timezone_alignment(
     # MUST be 2026-08-01 in installation local timezone!
     assert report.daily_breakdown[0].date == date(2026, 8, 1)
     assert date(2026, 7, 31) not in [item.date for item in report.daily_breakdown]
+
+
+@pytest.mark.asyncio
+async def test_august_21_midnight_crossover_timezone_alignment(
+    db_session: AsyncSession, sample_installation: Installation
+):
+    """
+    At 2026-08-20 22:00:00 UTC, in Europe/Kyiv (UTC+3) it is 2026-08-21 01:00:00.
+    The report for August 2026 must display both August 20 and August 21 columns.
+    """
+    # Aug 20 18:00 UTC = Aug 20 21:00 Kyiv
+    rec_aug20 = HourlyConsumption(
+        installation_id=sample_installation.id,
+        timestamp=datetime(2026, 8, 20, 18, 0, 0, tzinfo=timezone.utc),
+        raw_grid_import_kwh=2.0,
+        grid_voltage_v=220.0,
+        is_voltage_fallback=False,
+        loss_coefficient=1.03,
+        corrected_grid_import_kwh=2.06,
+        tariff_zone="DAY",
+        day_kwh=2.06,
+        night_kwh=0.0,
+    )
+    # Aug 20 22:00 UTC = Aug 21 01:00 Kyiv
+    rec_aug21 = HourlyConsumption(
+        installation_id=sample_installation.id,
+        timestamp=datetime(2026, 8, 20, 22, 0, 0, tzinfo=timezone.utc),
+        raw_grid_import_kwh=1.0,
+        grid_voltage_v=220.0,
+        is_voltage_fallback=False,
+        loss_coefficient=1.03,
+        corrected_grid_import_kwh=1.03,
+        tariff_zone="NIGHT",
+        day_kwh=0.0,
+        night_kwh=1.03,
+    )
+    db_session.add(rec_aug20)
+    db_session.add(rec_aug21)
+    await db_session.commit()
+
+    report = await calculate_monthly_report(
+        session=db_session,
+        installation=sample_installation,
+        year=2026,
+        month=8,
+    )
+
+    dates = [item.date for item in report.daily_breakdown]
+    assert date(2026, 8, 20) in dates
+    assert date(2026, 8, 21) in dates
+

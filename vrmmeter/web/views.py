@@ -1,6 +1,6 @@
 from datetime import datetime, timezone
 from pathlib import Path
-from fastapi import APIRouter, Depends, Query, Request
+from fastapi import APIRouter, Depends, Query, Request, Response
 from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
 from sqlalchemy import select
@@ -22,6 +22,28 @@ def to_json_filter(value):
 templates.env.filters["tojson"] = to_json_filter
 
 view_router = APIRouter(include_in_schema=False)
+
+FAVICON_SVG = """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 36 36" width="36" height="36">
+  <defs>
+    <linearGradient id="vrm-grad" x1="0%" y1="100%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#0284c7" />
+      <stop offset="100%" stop-color="#10b981" />
+    </linearGradient>
+  </defs>
+  <rect width="36" height="36" rx="8" fill="url(#vrm-grad)" />
+  <path d="M19.5 6L10 19h7l-2 11 11-14h-7.5l2-10z" fill="#ffffff" />
+</svg>"""
+
+
+@view_router.get("/favicon.svg")
+@view_router.get("/favicon.ico")
+async def favicon():
+    return Response(
+        content=FAVICON_SVG,
+        media_type="image/svg+xml",
+        headers={"Cache-Control": "public, max-age=86400"},
+    )
+
 
 
 async def get_all_installations(session: AsyncSession):
@@ -45,9 +67,20 @@ async def dashboard_view(
     if not selected_inst and installations:
         selected_inst = installations[0]
 
-    now = datetime.now(timezone.utc)
-    curr_year = year or now.year
-    curr_month = month or now.month
+    import zoneinfo
+
+    if selected_inst:
+        try:
+            inst_tz = zoneinfo.ZoneInfo(selected_inst.timezone)
+        except Exception:
+            inst_tz = timezone.utc
+        now_inst = datetime.now(inst_tz)
+    else:
+        now_inst = datetime.now(timezone.utc)
+
+    curr_year = year or now_inst.year
+    curr_month = month or now_inst.month
+
 
     report = None
     if selected_inst:
