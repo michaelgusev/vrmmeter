@@ -104,7 +104,7 @@
                     <span class="text-sm font-medium text-slate-400">kWh</span>
                 </div>
                 <div class="mt-3 pt-3 border-t border-slate-800 text-xs text-slate-400 flex justify-between">
-                    <span>Baseline: <strong class="text-slate-300 font-mono" x-text="result && result.reference_reading ? result.reference_reading.day_reading_kwh : '0'"></strong> kWh</span>
+                    <span>Baseline: <strong class="text-slate-300 font-mono" x-text="result && result.reference_reading ? Math.round(result.reference_reading.day_reading_kwh) : '0'"></strong> kWh</span>
                     <span>+ Delta: <strong class="text-amber-400 font-mono" x-text="result ? result.delta_day_kwh : '0'"></strong> kWh</span>
                 </div>
             </div>
@@ -116,7 +116,7 @@
                     <span class="text-sm font-medium text-slate-400">kWh</span>
                 </div>
                 <div class="mt-3 pt-3 border-t border-slate-800 text-xs text-slate-400 flex justify-between">
-                    <span>Baseline: <strong class="text-slate-300 font-mono" x-text="result && result.reference_reading ? result.reference_reading.night_reading_kwh : '0'"></strong> kWh</span>
+                    <span>Baseline: <strong class="text-slate-300 font-mono" x-text="result && result.reference_reading ? Math.round(result.reference_reading.night_reading_kwh) : '0'"></strong> kWh</span>
                     <span>+ Delta: <strong class="text-indigo-400 font-mono" x-text="result ? result.delta_night_kwh : '0'"></strong> kWh</span>
                 </div>
             </div>

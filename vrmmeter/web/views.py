@@ -8,7 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from vrmmeter.db.models import ElectricityPrice, Installation, MeterReading, SystemSetting, TelemetryParameter
 from vrmmeter.db.session import get_db
-from vrmmeter.services.calculator import calculate_monthly_report
+from vrmmeter.services.calculator import calculate_monthly_report, get_readings_with_deltas
 from vrmmeter.services.installer_importer import get_stored_vrm_token
 
 import json
@@ -147,13 +147,7 @@ async def readings_view(
 
     readings = []
     if selected_inst:
-        stmt = (
-            select(MeterReading)
-            .where(MeterReading.installation_id == selected_inst.id)
-            .order_by(MeterReading.timestamp.desc())
-        )
-        res = await session.execute(stmt)
-        readings = res.scalars().all()
+        readings = await get_readings_with_deltas(session, selected_inst.id)
 
     now_iso = datetime.now().strftime("%Y-%m-%dT%H:%M")
 

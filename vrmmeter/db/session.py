@@ -57,6 +57,8 @@ async def init_db() -> None:
                 columns = [row[1] for row in cursor.fetchall()]
                 if columns and "is_demo" not in columns:
                     cursor.execute("ALTER TABLE installations ADD COLUMN is_demo BOOLEAN DEFAULT 0 NOT NULL")
+                if columns and "currency" not in columns:
+                    cursor.execute("ALTER TABLE installations ADD COLUMN currency VARCHAR(8) DEFAULT 'EUR' NOT NULL")
                 cursor.execute("UPDATE installations SET is_demo = 1 WHERE vrm_site_id IN ('1001', '1002')")
                 cursor.close()
             except Exception:

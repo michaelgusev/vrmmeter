@@ -9,7 +9,7 @@
     dayPrice: '',
     nightPrice: '',
     standingCharge: '0.0',
-    currency: 'EUR',
+    currency: '{{ selected_inst.currency if selected_inst and selected_inst.currency else 'EUR' }}',
     isSubmitting: false,
     submitPrice() {
         if (!this.effectiveFrom || !this.dayPrice || !this.nightPrice) {
@@ -21,12 +21,12 @@
             method: 'POST',
             headers: {'Content-Type': 'application/json'},
             body: JSON.stringify({
-                installation_id: '{{ selected_inst.id if selected_inst else "" }}',
+                installation_id: '{{ selected_inst.id if selected_inst else '' }}',
                 effective_from: this.effectiveFrom,
                 day_price_per_kwh: parseFloat(this.dayPrice),
                 night_price_per_kwh: parseFloat(this.nightPrice),
                 standing_charge_daily: parseFloat(this.standingCharge || 0),
-                currency: this.currency.toUpperCase()
+                currency: this.currency
             })
         })
         .then(r => r.json())
@@ -190,10 +190,13 @@
                     </div>
                     <div>
                         <label class="block text-xs font-semibold uppercase tracking-wider text-slate-300 mb-1">
-                            Currency Symbol/Code
+                            Currency
                         </label>
-                        <input type="text" x-model="currency" placeholder="EUR, USD, UAH, GBP..."
-                               class="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-white text-sm focus:ring-emerald-500 focus:border-emerald-500">
+                        <div class="w-full bg-slate-950/70 border border-slate-700/60 rounded-lg px-3 py-2 text-white font-mono text-sm flex items-center justify-between cursor-not-allowed select-none"
+                             title="Currency is set in Installation Settings">
+                            <span class="font-bold text-emerald-400" x-text="currency"></span>
+                            <span class="text-[10px] text-slate-400">Pre-set in Settings</span>
+                        </div>
                     </div>
                 </div>
             </div>

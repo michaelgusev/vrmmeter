@@ -19,12 +19,17 @@ WORKDIR /app
 COPY pyproject.toml uv.lock* /app/
 RUN uv sync --frozen --no-install-project --no-dev
 
-# Copy application source code
+# Copy application source code, configuration, and build scripts
 COPY vrmmeter/ /app/vrmmeter/
+COPY scripts/ /app/scripts/
 COPY README.md /app/
 
 # Install the application into the venv
 RUN uv sync --frozen --no-dev
+
+# Build and fetch frontend static assets (Tailwind CSS, Alpine.js, Chart.js)
+RUN python scripts/build_assets.py && rm -rf /app/.cache
+
 
 # Install gosu for lightweight runtime privilege dropping
 RUN apt-get update && \
@@ -38,9 +43,10 @@ RUN mkdir -p /app/data && \
     chown -R vrmmeter:vrmmeter /app
 
 # Copy entrypoint script
-COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
+COPY scripts/docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 RUN sed -i 's/\r$//' /usr/local/bin/docker-entrypoint.sh && \
     chmod +x /usr/local/bin/docker-entrypoint.sh
+
 
 # Expose port
 EXPOSE 8000

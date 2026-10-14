@@ -53,6 +53,7 @@ async def sample_installation(db_session: AsyncSession) -> Installation:
             {"zone": "NIGHT", "start": "23:00", "end": "07:00"},
             {"zone": "DAY", "start": "07:00", "end": "23:00"},
         ],
+        currency="EUR",
         is_active=True,
     )
     db_session.add(inst)

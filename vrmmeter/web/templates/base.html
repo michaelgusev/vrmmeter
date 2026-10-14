@@ -7,35 +7,12 @@
     <!-- Favicon -->
     <link rel="icon" type="image/svg+xml" href="/favicon.svg">
     <link rel="alternate icon" href="/favicon.ico">
-    <!-- Tailwind CSS CDN -->
-    <script src="https://cdn.tailwindcss.com"></script>
-    <script>
-        tailwind.config = {
-            theme: {
-                extend: {
-                    colors: {
-                        brand: {
-                            50: '#f0fdf4',
-                            100: '#dcfce7',
-                            500: '#22c55e',
-                            600: '#16a34a',
-                            700: '#15803d',
-                            900: '#14532d',
-                        },
-                        victron: {
-                            blue: '#005487',
-                            dark: '#003657',
-                            accent: '#f59e0b',
-                        }
-                    }
-                }
-            }
-        }
-    </script>
-    <!-- Alpine.js -->
-    <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
-    <!-- Chart.js -->
-    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <!-- Tailwind CSS (Precompiled Static Stylesheet) -->
+    <link rel="stylesheet" href="/static/css/tailwind.css">
+    <!-- Alpine.js (Self-hosted) -->
+    <script defer src="/static/js/alpine.min.js"></script>
+    <!-- Chart.js (Self-hosted) -->
+    <script src="/static/js/chart.umd.min.js"></script>
     <style>
         [x-cloak] { display: none !important; }
     </style>

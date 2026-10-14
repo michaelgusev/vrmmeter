@@ -67,6 +67,7 @@ async def discover_and_import_installations(
                     {"zone": "NIGHT", "start": "23:00", "end": "07:00"},
                     {"zone": "DAY", "start": "07:00", "end": "23:00"},
                 ],
+                currency="EUR",
                 is_active=True,
                 is_demo=is_demo_site,
             )

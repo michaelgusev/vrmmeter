@@ -45,7 +45,6 @@ venv.bak/
 # Databases & Runtime Data
 # Ignores all database files while preserving data/ folder structure
 data/*
-!data/.gitkeep
 *.db
 *.db-journal
 *.db-wal
@@ -59,9 +58,20 @@ data/*
 .nox/
 .coverage
 .coverage.*
-.cache
+.cache/
 nosetests.xml
 coverage.xml
+
+# Generated / downloaded static frontend assets (built during Docker/build step)
+vrmmeter/web/static/**
+!vrmmeter/web/static/**/
+
+# Never ignore .gitkeep placeholder files in any directory
+!.gitkeep
+
+*.md
+!README.md
+
 *.cover
 *.py,cover
 .hypothesis/

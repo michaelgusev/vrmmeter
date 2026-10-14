@@ -76,6 +76,8 @@ class Installation(Base):
     avr_idle_loss_kwh: Mapped[float] = mapped_column(Float, default=0.015, nullable=False)  # kWh/h idle
     loss_base_factor: Mapped[float] = mapped_column(Float, default=0.03, nullable=False)    # 3% baseline
     loss_voltage_factor: Mapped[float] = mapped_column(Float, default=0.05, nullable=False) # voltage sensitivity
+    currency: Mapped[str] = mapped_column(String(8), default="EUR", nullable=False)
+
 
     # Tariff schedule stored as list of intervals in local time:
     # [{"zone": "NIGHT", "start": "23:00", "end": "07:00"}, {"zone": "DAY", "start": "07:00", "end": "23:00"}]

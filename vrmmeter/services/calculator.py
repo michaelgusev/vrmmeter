@@ -9,6 +9,7 @@ from vrmmeter.db.models import ElectricityPrice, HourlyConsumption, Installation
 from vrmmeter.schemas import (
     DailyConsumptionItem,
     MeterCalculationResponse,
+    MeterReadingOut,
     MonthlyReportResponse,
     ReferenceReadingAudit,
     TariffCostBreakdown,
@@ -20,6 +21,147 @@ def ensure_utc(dt: datetime) -> datetime:
     if dt.tzinfo is None:
         return dt.replace(tzinfo=timezone.utc)
     return dt.astimezone(timezone.utc)
+
+
+def format_delta(val: Optional[float]) -> str:
+    """
+    Format a delta value as string:
+    - Zero or near zero: "(0)"
+    - Positive integer: "(+200)"
+    - Positive decimal: "(+200.5)", "(+200.25)"
+    - Negative integer: "(-50)"
+    - Negative decimal: "(-50.5)", "(-50.25)"
+    """
+    if val is None:
+        return "(0)"
+    val = round(val, 2)
+    if abs(val) < 0.001:
+        return "(0)"
+    if abs(val - round(val)) < 0.0001:
+        int_val = int(round(val))
+        return f"(+{int_val})" if int_val > 0 else f"({int_val})"
+    formatted = f"{val:+.2f}".rstrip("0").rstrip(".")
+    return f"({formatted})"
+
+
+async def get_readings_with_deltas(
+    session: AsyncSession,
+    installation_id: str,
+) -> List[MeterReadingOut]:
+    """
+    Retrieve all reference meter readings for an installation with calculated deltas
+    against expected readings based on the preceding reading, VRM hourly consumption data,
+    and current loss coefficients.
+    Returns readings sorted by timestamp descending (newest first).
+    """
+    stmt = (
+        select(MeterReading)
+        .where(
+            MeterReading.installation_id == installation_id,
+            MeterReading.is_reference == True,
+        )
+        .order_by(MeterReading.timestamp.asc())
+    )
+    res = await session.execute(stmt)
+    raw_readings = res.scalars().all()
+
+    if not raw_readings:
+        return []
+
+    min_ts = ensure_utc(raw_readings[0].timestamp)
+    max_ts = ensure_utc(raw_readings[-1].timestamp)
+
+    h_stmt = (
+        select(HourlyConsumption)
+        .where(
+            HourlyConsumption.installation_id == installation_id,
+            HourlyConsumption.timestamp >= min_ts,
+            HourlyConsumption.timestamp < max_ts,
+        )
+        .order_by(HourlyConsumption.timestamp.asc())
+    )
+    h_res = await session.execute(h_stmt)
+    hourly_records = h_res.scalars().all()
+
+    calculated_items: List[MeterReadingOut] = []
+
+    for idx, r in enumerate(raw_readings):
+        r_ts_utc = ensure_utc(r.timestamp)
+        day_int = int(round(r.day_reading_kwh))
+        night_int = int(round(r.night_reading_kwh))
+        total_int = day_int + night_int
+
+        if idx == 0:
+            # First ever reading: no preceding reading, delta is (0)
+            calculated_items.append(
+                MeterReadingOut(
+                    id=r.id,
+                    installation_id=r.installation_id,
+                    timestamp=r.timestamp,
+                    day_reading_kwh=day_int,
+                    night_reading_kwh=night_int,
+                    zone_readings=r.zone_readings,
+                    is_reference=r.is_reference,
+                    notes=r.notes,
+                    created_at=r.created_at,
+                    delta_day_kwh=0.0,
+                    delta_night_kwh=0.0,
+                    delta_total_kwh=0.0,
+                    delta_day_str="(0)",
+                    delta_night_str="(0)",
+                    delta_total_str="(0)",
+                    expected_day_reading=float(day_int),
+                    expected_night_reading=float(night_int),
+                    expected_total_reading=float(total_int),
+                )
+            )
+        else:
+            prev_r = raw_readings[idx - 1]
+            prev_ts_utc = ensure_utc(prev_r.timestamp)
+            prev_day_int = int(round(prev_r.day_reading_kwh))
+            prev_night_int = int(round(prev_r.night_reading_kwh))
+
+            records_in_range = [
+                h for h in hourly_records
+                if prev_ts_utc <= ensure_utc(h.timestamp) < r_ts_utc
+            ]
+
+            vrm_day = sum(h.day_kwh for h in records_in_range)
+            vrm_night = sum(h.night_kwh for h in records_in_range)
+
+            exp_day = round(prev_day_int + vrm_day, 2)
+            exp_night = round(prev_night_int + vrm_night, 2)
+            exp_total = round(exp_day + exp_night, 2)
+
+            d_day = round(day_int - exp_day, 2)
+            d_night = round(night_int - exp_night, 2)
+            d_total = round(total_int - exp_total, 2)
+
+            calculated_items.append(
+                MeterReadingOut(
+                    id=r.id,
+                    installation_id=r.installation_id,
+                    timestamp=r.timestamp,
+                    day_reading_kwh=day_int,
+                    night_reading_kwh=night_int,
+                    zone_readings=r.zone_readings,
+                    is_reference=r.is_reference,
+                    notes=r.notes,
+                    created_at=r.created_at,
+                    delta_day_kwh=d_day,
+                    delta_night_kwh=d_night,
+                    delta_total_kwh=d_total,
+                    delta_day_str=format_delta(d_day),
+                    delta_night_str=format_delta(d_night),
+                    delta_total_str=format_delta(d_total),
+                    expected_day_reading=exp_day,
+                    expected_night_reading=exp_night,
+                    expected_total_reading=exp_total,
+                )
+            )
+
+    calculated_items.reverse()
+    return calculated_items
 
 
 async def get_effective_price(
@@ -76,13 +218,13 @@ async def estimate_meter_reading(
 
     if ref_reading:
         start_ts = ref_reading.timestamp
-        base_day = ref_reading.day_reading_kwh
-        base_night = ref_reading.night_reading_kwh
+        base_day = float(int(round(ref_reading.day_reading_kwh)))
+        base_night = float(int(round(ref_reading.night_reading_kwh)))
         ref_audit = ReferenceReadingAudit(
             id=ref_reading.id,
             timestamp=ref_reading.timestamp,
-            day_reading_kwh=ref_reading.day_reading_kwh,
-            night_reading_kwh=ref_reading.night_reading_kwh,
+            day_reading_kwh=int(round(ref_reading.day_reading_kwh)),
+            night_reading_kwh=int(round(ref_reading.night_reading_kwh)),
             notes=ref_reading.notes,
         )
         is_extrapolated = True
@@ -104,8 +246,8 @@ async def estimate_meter_reading(
             ref_audit = ReferenceReadingAudit(
                 id=earliest_ref.id,
                 timestamp=earliest_ref.timestamp,
-                day_reading_kwh=earliest_ref.day_reading_kwh,
-                night_reading_kwh=earliest_ref.night_reading_kwh,
+                day_reading_kwh=int(round(earliest_ref.day_reading_kwh)),
+                night_reading_kwh=int(round(earliest_ref.night_reading_kwh)),
                 notes=f"Earliest reference (from {earliest_ref.timestamp.date()})",
             )
             # Extrapolate backwards if target_time is before earliest reference
@@ -228,7 +370,7 @@ async def calculate_monthly_report(
     day_rate = price_rec.day_price_per_kwh if price_rec else 0.0
     night_rate = price_rec.night_price_per_kwh if price_rec else 0.0
     standing_charge_daily = price_rec.standing_charge_daily if price_rec else 0.0
-    currency = price_rec.currency if price_rec else "EUR"
+    currency = price_rec.currency if price_rec else (getattr(installation, "currency", None) or "EUR")
 
     # Calculate days for standing charge
     if is_incomplete and now_utc > start_utc:

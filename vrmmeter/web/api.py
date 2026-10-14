@@ -35,7 +35,11 @@ from vrmmeter.schemas import (
     VrmTestResponse,
     VrmTokenUpdate,
 )
-from vrmmeter.services.calculator import calculate_monthly_report, estimate_meter_reading
+from vrmmeter.services.calculator import (
+    calculate_monthly_report,
+    estimate_meter_reading,
+    get_readings_with_deltas,
+)
 from vrmmeter.services.installer_importer import (
     discover_and_import_installations,
     get_stored_vrm_token,
@@ -106,6 +110,12 @@ async def test_vrm_connection(
 @api_router.post("/installations/discover", response_model=VrmImportResponse)
 async def discover_and_import_vrm_sites(session: AsyncSession = Depends(get_db)):
     """Discover all sites from VRM account and auto-import them into database."""
+    token = await get_stored_vrm_token(session)
+    if not token or not token.strip():
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="No VRM API token configured. Please enter and save a VRM token before discovering installations.",
+        )
     try:
         imported, updated, installations = await discover_and_import_installations(session)
         items: List[VrmDiscoveryItem] = [
@@ -123,11 +133,46 @@ async def discover_and_import_vrm_sites(session: AsyncSession = Depends(get_db))
             updated_count=updated,
             installations=items,
         )
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"Failed to discover VRM sites: {str(e)}",
         )
+
+
+@api_router.post("/installations/load-demo", response_model=VrmImportResponse)
+async def load_demo_installations(session: AsyncSession = Depends(get_db)):
+    """Explicitly load simulated/demo Victron installations for evaluation and testing."""
+    from vrmmeter.services.vrm_client import MockVrmClient
+
+    try:
+        mock_client = MockVrmClient()
+        imported, updated, installations = await discover_and_import_installations(
+            session=session, vrm_client=mock_client
+        )
+        items: List[VrmDiscoveryItem] = [
+            VrmDiscoveryItem(
+                site_id=inst.vrm_site_id,
+                name=inst.name,
+                timezone=inst.timezone,
+                already_imported=True,
+            )
+            for inst in installations
+        ]
+        return VrmImportResponse(
+            success=True,
+            imported_count=imported,
+            updated_count=updated,
+            installations=items,
+        )
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to load demo installations: {str(e)}",
+        )
+
 
 
 # --- Installations CRUD ---
@@ -159,6 +204,7 @@ async def create_installation(
         loss_base_factor=payload.loss_base_factor,
         loss_voltage_factor=payload.loss_voltage_factor,
         tariff_schedule=[t.model_dump() for t in payload.tariff_schedule],
+        currency=payload.currency.strip().upper() if payload.currency else "EUR",
         is_active=payload.is_active,
         is_demo=payload.is_demo,
     )
@@ -195,6 +241,8 @@ async def update_installation(
                 loss_params_changed = True
         if field == "tariff_schedule" and val is not None:
             setattr(inst, field, [t.model_dump() if hasattr(t, "model_dump") else t for t in val])
+        elif field == "currency" and val is not None:
+            setattr(inst, field, val.strip().upper() or "EUR")
         else:
             setattr(inst, field, val)
 
@@ -236,6 +284,15 @@ async def list_prices(
 async def create_price(
     payload: ElectricityPriceCreate, session: AsyncSession = Depends(get_db)
 ):
+    # Lookup installation to get pre-set currency if not provided
+    inst_stmt = select(Installation).where(Installation.id == payload.installation_id)
+    inst_res = await session.execute(inst_stmt)
+    inst = inst_res.scalar_one_or_none()
+    if not inst:
+        raise HTTPException(status_code=404, detail="Installation not found")
+
+    target_currency = (payload.currency.strip().upper() if payload.currency and payload.currency.strip() else inst.currency) or "EUR"
+
     # Check if a price with same installation_id and effective_from exists
     stmt = select(ElectricityPrice).where(
         ElectricityPrice.installation_id == payload.installation_id,
@@ -249,7 +306,7 @@ async def create_price(
         existing.night_price_per_kwh = payload.night_price_per_kwh
         existing.zone_prices = payload.zone_prices
         existing.standing_charge_daily = payload.standing_charge_daily
-        existing.currency = payload.currency
+        existing.currency = target_currency
         await session.commit()
         await session.refresh(existing)
         return existing
@@ -261,12 +318,13 @@ async def create_price(
         night_price_per_kwh=payload.night_price_per_kwh,
         zone_prices=payload.zone_prices,
         standing_charge_daily=payload.standing_charge_daily,
-        currency=payload.currency,
+        currency=target_currency,
     )
     session.add(price)
     await session.commit()
     await session.refresh(price)
     return price
+
 
 
 @api_router.delete("/prices/{price_id}", status_code=status.HTTP_204_NO_CONTENT)
@@ -285,11 +343,18 @@ async def delete_price(price_id: int, session: AsyncSession = Depends(get_db)):
 async def list_meter_readings(
     installation_id: Optional[str] = Query(None), session: AsyncSession = Depends(get_db)
 ):
-    stmt = select(MeterReading).order_by(MeterReading.timestamp.desc())
     if installation_id:
-        stmt = stmt.where(MeterReading.installation_id == installation_id)
+        return await get_readings_with_deltas(session, installation_id)
+
+    stmt = select(Installation.id)
     res = await session.execute(stmt)
-    return res.scalars().all()
+    inst_ids = res.scalars().all()
+    all_readings: List[MeterReadingOut] = []
+    for i_id in inst_ids:
+        r_list = await get_readings_with_deltas(session, i_id)
+        all_readings.extend(r_list)
+    all_readings.sort(key=lambda x: x.timestamp, reverse=True)
+    return all_readings
 
 
 @api_router.post("/readings", response_model=MeterReadingOut, status_code=status.HTTP_201_CREATED)

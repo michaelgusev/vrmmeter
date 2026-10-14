@@ -59,6 +59,7 @@ class InstallationBase(BaseModel):
             TariffInterval(zone="DAY", start="07:00", end="23:00"),
         ]
     )
+    currency: str = Field(default="EUR", max_length=8, description="Currency code or symbol, e.g. EUR, USD, UAH, GBP")
     is_active: bool = True
     is_demo: bool = False
 
@@ -75,6 +76,7 @@ class InstallationUpdate(BaseModel):
     loss_base_factor: Optional[float] = None
     loss_voltage_factor: Optional[float] = None
     tariff_schedule: Optional[List[TariffInterval]] = None
+    currency: Optional[str] = None
     is_active: Optional[bool] = None
     is_demo: Optional[bool] = None
 
@@ -98,6 +100,8 @@ class ElectricityPriceBase(BaseModel):
 
 class ElectricityPriceCreate(ElectricityPriceBase):
     installation_id: str
+    currency: Optional[str] = Field(default=None, max_length=8)
+
 
 
 class ElectricityPriceOut(ElectricityPriceBase):
@@ -110,8 +114,8 @@ class ElectricityPriceOut(ElectricityPriceBase):
 # --- Reference Meter Reading Schemas ---
 class MeterReadingBase(BaseModel):
     timestamp: datetime
-    day_reading_kwh: float = Field(..., ge=0.0)
-    night_reading_kwh: float = Field(..., ge=0.0)
+    day_reading_kwh: int = Field(..., ge=0)
+    night_reading_kwh: int = Field(..., ge=0)
     zone_readings: Optional[Dict[str, float]] = None
     is_reference: bool = True
     notes: Optional[str] = None
@@ -126,6 +130,15 @@ class MeterReadingOut(MeterReadingBase):
     id: int
     installation_id: str
     created_at: datetime
+    delta_day_kwh: float = 0.0
+    delta_night_kwh: float = 0.0
+    delta_total_kwh: float = 0.0
+    delta_day_str: str = "(0)"
+    delta_night_str: str = "(0)"
+    delta_total_str: str = "(0)"
+    expected_day_reading: Optional[float] = None
+    expected_night_reading: Optional[float] = None
+    expected_total_reading: Optional[float] = None
 
 
 # --- Telemetry Ingestion Schemas ---
@@ -189,8 +202,8 @@ class MeterCalculationRequest(BaseModel):
 class ReferenceReadingAudit(BaseModel):
     id: int
     timestamp: datetime
-    day_reading_kwh: float
-    night_reading_kwh: float
+    day_reading_kwh: int
+    night_reading_kwh: int
     notes: Optional[str] = None
 
 

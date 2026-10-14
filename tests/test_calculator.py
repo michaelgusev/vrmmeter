@@ -3,7 +3,13 @@ import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from vrmmeter.db.models import HourlyConsumption, Installation, MeterReading
-from vrmmeter.services.calculator import calculate_monthly_report, estimate_meter_reading, get_effective_price
+from vrmmeter.services.calculator import (
+    calculate_monthly_report,
+    estimate_meter_reading,
+    format_delta,
+    get_effective_price,
+    get_readings_with_deltas,
+)
 
 
 @pytest.mark.asyncio
@@ -236,4 +242,221 @@ async def test_august_21_midnight_crossover_timezone_alignment(
     dates = [item.date for item in report.daily_breakdown]
     assert date(2026, 8, 20) in dates
     assert date(2026, 8, 21) in dates
+
+
+def test_format_delta():
+    assert format_delta(0.0) == "(0)"
+    assert format_delta(None) == "(0)"
+    assert format_delta(0.0001) == "(0)"
+    assert format_delta(-0.0001) == "(0)"
+    assert format_delta(200.0) == "(+200)"
+    assert format_delta(-50.0) == "(-50)"
+    assert format_delta(200.5) == "(+200.5)"
+    assert format_delta(-50.25) == "(-50.25)"
+
+
+@pytest.mark.asyncio
+async def test_get_readings_with_deltas_single_and_multiple(
+    db_session: AsyncSession, sample_installation: Installation
+):
+    # sample_installation already has 1 reference reading at 2026-01-01 (10000.0, 5000.0)
+    readings = await get_readings_with_deltas(db_session, sample_installation.id)
+    assert len(readings) == 1
+    assert readings[0].delta_day_kwh == 0.0
+    assert readings[0].delta_night_kwh == 0.0
+    assert readings[0].delta_total_kwh == 0.0
+    assert readings[0].delta_day_str == "(0)"
+    assert readings[0].delta_night_str == "(0)"
+    assert readings[0].delta_total_str == "(0)"
+    assert readings[0].expected_day_reading == 10000.0
+    assert readings[0].expected_night_reading == 5000.0
+    assert readings[0].expected_total_reading == 15000.0
+
+    # Add VRM consumption between 2026-01-01 and 2026-02-01:
+    # Day VRM = 900.0, Night VRM = 450.0
+    dt_day = datetime(2026, 1, 10, 12, 0, 0, tzinfo=timezone.utc)
+    dt_night = datetime(2026, 1, 10, 2, 0, 0, tzinfo=timezone.utc)
+    h1 = HourlyConsumption(
+        installation_id=sample_installation.id,
+        timestamp=dt_day,
+        raw_grid_import_kwh=900.0,
+        grid_voltage_v=220.0,
+        is_voltage_fallback=False,
+        loss_coefficient=1.0,
+        corrected_grid_import_kwh=900.0,
+        tariff_zone="DAY",
+        day_kwh=900.0,
+        night_kwh=0.0,
+    )
+    h2 = HourlyConsumption(
+        installation_id=sample_installation.id,
+        timestamp=dt_night,
+        raw_grid_import_kwh=450.0,
+        grid_voltage_v=220.0,
+        is_voltage_fallback=False,
+        loss_coefficient=1.0,
+        corrected_grid_import_kwh=450.0,
+        tariff_zone="NIGHT",
+        day_kwh=0.0,
+        night_kwh=450.0,
+    )
+    db_session.add(h1)
+    db_session.add(h2)
+
+    # Add second reference reading at 2026-02-01:
+    # Expected: day = 10000 + 900 = 10900, night = 5000 + 450 = 5450, total = 16350
+    # Entered: day = 11100 (+200), night = 5500 (+50), total = 16600 (+250)
+    ref2 = MeterReading(
+        installation_id=sample_installation.id,
+        timestamp=datetime(2026, 2, 1, 0, 0, 0, tzinfo=timezone.utc),
+        day_reading_kwh=11100.0,
+        night_reading_kwh=5500.0,
+        is_reference=True,
+        notes="Feb reading",
+    )
+    db_session.add(ref2)
+    await db_session.commit()
+
+    # Query readings with deltas
+    readings = await get_readings_with_deltas(db_session, sample_installation.id)
+    assert len(readings) == 2
+    # Result is descending by timestamp: readings[0] is Feb 1, readings[1] is Jan 1
+    r_feb = readings[0]
+    r_jan = readings[1]
+
+    assert r_jan.delta_day_str == "(0)"
+    assert r_jan.delta_night_str == "(0)"
+    assert r_jan.delta_total_str == "(0)"
+
+    assert r_feb.expected_day_reading == 10900.0
+    assert r_feb.expected_night_reading == 5450.0
+    assert r_feb.expected_total_reading == 16350.0
+    assert r_feb.delta_day_kwh == 200.0
+    assert r_feb.delta_night_kwh == 50.0
+    assert r_feb.delta_total_kwh == 250.0
+    assert r_feb.delta_day_str == "(+200)"
+    assert r_feb.delta_night_str == "(+50)"
+    assert r_feb.delta_total_str == "(+250)"
+
+    # Add VRM consumption between Feb 1 and Mar 1:
+    # Day VRM = 920.0, Night VRM = 410.0
+    h3 = HourlyConsumption(
+        installation_id=sample_installation.id,
+        timestamp=datetime(2026, 2, 10, 12, 0, 0, tzinfo=timezone.utc),
+        raw_grid_import_kwh=920.0,
+        grid_voltage_v=220.0,
+        is_voltage_fallback=False,
+        loss_coefficient=1.0,
+        corrected_grid_import_kwh=920.0,
+        tariff_zone="DAY",
+        day_kwh=920.0,
+        night_kwh=0.0,
+    )
+    h4 = HourlyConsumption(
+        installation_id=sample_installation.id,
+        timestamp=datetime(2026, 2, 10, 2, 0, 0, tzinfo=timezone.utc),
+        raw_grid_import_kwh=410.0,
+        grid_voltage_v=220.0,
+        is_voltage_fallback=False,
+        loss_coefficient=1.0,
+        corrected_grid_import_kwh=410.0,
+        tariff_zone="NIGHT",
+        day_kwh=0.0,
+        night_kwh=410.0,
+    )
+    db_session.add(h3)
+    db_session.add(h4)
+
+    # Add third reference reading at 2026-03-01:
+    # Expected from Feb 1: day = 11100 + 920 = 12020, night = 5500 + 410 = 5910, total = 17930
+    # Entered: day = 12000 (-20), night = 5900 (-10), total = 17900 (-30)
+    ref3 = MeterReading(
+        installation_id=sample_installation.id,
+        timestamp=datetime(2026, 3, 1, 0, 0, 0, tzinfo=timezone.utc),
+        day_reading_kwh=12000.0,
+        night_reading_kwh=5900.0,
+        is_reference=True,
+        notes="Mar reading",
+    )
+    db_session.add(ref3)
+    await db_session.commit()
+
+    readings = await get_readings_with_deltas(db_session, sample_installation.id)
+    assert len(readings) == 3
+    r_mar = readings[0]
+    assert r_mar.expected_day_reading == 12020.0
+    assert r_mar.expected_night_reading == 5910.0
+    assert r_mar.expected_total_reading == 17930.0
+    assert r_mar.delta_day_kwh == -20.0
+    assert r_mar.delta_night_kwh == -10.0
+    assert r_mar.delta_total_kwh == -30.0
+    assert r_mar.delta_day_str == "(-20)"
+    assert r_mar.delta_night_str == "(-10)"
+    assert r_mar.delta_total_str == "(-30)"
+
+
+@pytest.mark.asyncio
+async def test_get_readings_with_deltas_recalculation_on_delete(
+    db_session: AsyncSession, sample_installation: Installation
+):
+    # Sample has Jan 1 (10000, 5000).
+    # Add VRM data for Jan (day 500) and Feb (day 300)
+    h1 = HourlyConsumption(
+        installation_id=sample_installation.id,
+        timestamp=datetime(2026, 1, 15, 12, 0, 0, tzinfo=timezone.utc),
+        raw_grid_import_kwh=500.0,
+        grid_voltage_v=220.0,
+        is_voltage_fallback=False,
+        loss_coefficient=1.0,
+        corrected_grid_import_kwh=500.0,
+        tariff_zone="DAY",
+        day_kwh=500.0,
+        night_kwh=0.0,
+    )
+    h2 = HourlyConsumption(
+        installation_id=sample_installation.id,
+        timestamp=datetime(2026, 2, 15, 12, 0, 0, tzinfo=timezone.utc),
+        raw_grid_import_kwh=300.0,
+        grid_voltage_v=220.0,
+        is_voltage_fallback=False,
+        loss_coefficient=1.0,
+        corrected_grid_import_kwh=300.0,
+        tariff_zone="DAY",
+        day_kwh=300.0,
+        night_kwh=0.0,
+    )
+    ref2 = MeterReading(
+        installation_id=sample_installation.id,
+        timestamp=datetime(2026, 2, 1, 0, 0, 0, tzinfo=timezone.utc),
+        day_reading_kwh=10550.0,  # exp: 10500, delta: +50
+        night_reading_kwh=5000.0,
+        is_reference=True,
+    )
+    ref3 = MeterReading(
+        installation_id=sample_installation.id,
+        timestamp=datetime(2026, 3, 1, 0, 0, 0, tzinfo=timezone.utc),
+        day_reading_kwh=10850.0,  # exp from ref2: 10550 + 300 = 10850, delta: 0
+        night_reading_kwh=5000.0,
+        is_reference=True,
+    )
+    db_session.add_all([h1, h2, ref2, ref3])
+    await db_session.commit()
+
+    readings = await get_readings_with_deltas(db_session, sample_installation.id)
+    assert len(readings) == 3
+    assert readings[0].delta_day_str == "(0)"  # Mar 1: 10850 - 10850 = 0
+    assert readings[1].delta_day_str == "(+50)"  # Feb 1: 10550 - 10500 = +50
+
+    # Delete ref2 (Feb 1 reading)
+    await db_session.delete(ref2)
+    await db_session.commit()
+
+    # Now Mar 1 is calculated directly against Jan 1!
+    # Expected day from Jan 1: 10000 + 500 + 300 = 10800.
+    # Entered: 10850 -> delta = +50!
+    readings = await get_readings_with_deltas(db_session, sample_installation.id)
+    assert len(readings) == 2
+    assert readings[0].expected_day_reading == 10800.0
+    assert readings[0].delta_day_kwh == 50.0
+    assert readings[0].delta_day_str == "(+50)"
 

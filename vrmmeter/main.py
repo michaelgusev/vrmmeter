@@ -1,6 +1,8 @@
 from contextlib import asynccontextmanager
 import logging
+from pathlib import Path
 from fastapi import FastAPI
+from fastapi.staticfiles import StaticFiles
 import uvicorn
 
 from vrmmeter.config import settings
@@ -43,9 +45,15 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+# Register static files mount
+static_dir = Path(__file__).parent / "web" / "static"
+app.mount("/static", StaticFiles(directory=str(static_dir)), name="static")
+
 # Register routers
 app.include_router(api_router)
 app.include_router(view_router)
+
+
 
 
 if __name__ == "__main__":
