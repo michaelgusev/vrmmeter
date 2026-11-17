@@ -1,5 +1,7 @@
 from datetime import datetime, timezone
+import json
 from pathlib import Path
+import zoneinfo
 from fastapi import APIRouter, Depends, Query, Request, Response
 from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
@@ -11,15 +13,35 @@ from vrmmeter.db.session import get_db
 from vrmmeter.services.calculator import calculate_monthly_report, get_readings_with_deltas
 from vrmmeter.services.installer_importer import get_stored_vrm_token
 
-import json
-
 templates_dir = Path(__file__).parent / "templates"
 templates = Jinja2Templates(directory=str(templates_dir))
 
 def to_json_filter(value):
     return json.dumps(value, default=str)
 
+def local_time_filter(dt: datetime | None, tz_name: str | None = "UTC") -> str:
+    if dt is None:
+        return ""
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    if tz_name:
+        try:
+            target_tz = zoneinfo.ZoneInfo(tz_name)
+            dt = dt.astimezone(target_tz)
+        except Exception:
+            pass
+    return dt.strftime("%Y-%m-%d %H:%M:%S")
+
+def get_installation_tz(inst: Installation | None) -> timezone | zoneinfo.ZoneInfo:
+    if inst:
+        try:
+            return zoneinfo.ZoneInfo(inst.timezone)
+        except Exception:
+            pass
+    return timezone.utc
+
 templates.env.filters["tojson"] = to_json_filter
+templates.env.filters["local_time"] = local_time_filter
 
 view_router = APIRouter(include_in_schema=False)
 
@@ -67,16 +89,8 @@ async def dashboard_view(
     if not selected_inst and installations:
         selected_inst = installations[0]
 
-    import zoneinfo
-
-    if selected_inst:
-        try:
-            inst_tz = zoneinfo.ZoneInfo(selected_inst.timezone)
-        except Exception:
-            inst_tz = timezone.utc
-        now_inst = datetime.now(inst_tz)
-    else:
-        now_inst = datetime.now(timezone.utc)
+    inst_tz = get_installation_tz(selected_inst)
+    now_inst = datetime.now(inst_tz)
 
     curr_year = year or now_inst.year
     curr_month = month or now_inst.month
@@ -118,7 +132,8 @@ async def meter_tool_view(
     if not selected_inst and installations:
         selected_inst = installations[0]
 
-    now_iso = datetime.now().strftime("%Y-%m-%dT%H:%M")
+    inst_tz = get_installation_tz(selected_inst)
+    now_iso = datetime.now(inst_tz).strftime("%Y-%m-%dT%H:%M")
 
     return templates.TemplateResponse(
         request=request,
@@ -149,7 +164,8 @@ async def readings_view(
     if selected_inst:
         readings = await get_readings_with_deltas(session, selected_inst.id)
 
-    now_iso = datetime.now().strftime("%Y-%m-%dT%H:%M")
+    inst_tz = get_installation_tz(selected_inst)
+    now_iso = datetime.now(inst_tz).strftime("%Y-%m-%dT%H:%M")
 
     return templates.TemplateResponse(
         request=request,

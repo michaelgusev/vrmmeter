@@ -1,4 +1,4 @@
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 import pytest
 from httpx import ASGITransport, AsyncClient
 
@@ -278,6 +278,9 @@ async def test_api_readings_crud_and_deltas(
         # Verify uniform grey delta styling and right-aligned layout
         assert '<span class="w-16 text-right text-xs font-normal text-slate-400">(+200)</span>' in res_html.text
         assert '<span class="w-16 text-right text-xs font-normal text-slate-400">(0)</span>' in res_html.text
+        assert "Timestamp (Europe/Kyiv)" in res_html.text
+        assert "2026-01-01 02:00:00" in res_html.text
+        assert "2026-02-01 02:00:00" in res_html.text
 
         # 6. Update loss coefficients in settings via PUT /api/installations/{id}
         # Change loss_base_factor to 0.10 (10% loss).
@@ -297,5 +300,133 @@ async def test_api_readings_crud_and_deltas(
         items_after = res_list_after.json()
         assert items_after[0]["delta_day_kwh"] == 110.0
         assert items_after[0]["delta_day_str"] == "(+110)"
+
+
+@pytest.mark.asyncio
+async def test_api_optimize_coefficients_flow(
+    override_db, db_session, sample_installation: Installation
+):
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        inst_id = sample_installation.id
+
+        # 1. Preview with only 1 reading -> can_optimize should be False
+        res_prev1 = await client.post(f"/api/installations/{inst_id}/optimize-coefficients")
+        assert res_prev1.status_code == 200
+        data1 = res_prev1.json()
+        assert data1["can_optimize"] is False
+        assert data1["current_readings_count"] == 1
+        assert data1["min_readings_required"] == 4
+        assert "At least 4 reference readings" in data1["message"]
+
+        # 2. Verify button is present in HTML template
+        res_html = await client.get(f"/readings?installation_id={inst_id}")
+        assert res_html.status_code == 200
+        assert "Optimize Coefficients" in res_html.text
+
+        # 3. Add 3 more readings (total 4) and hourly consumption across 3 intervals
+        base_dt = datetime(2026, 1, 1, 0, 0, 0, tzinfo=timezone.utc)
+        # Add 30 days of hourly data (720 hours)
+        for h in range(720):
+            dt = base_dt + timedelta(hours=h)
+            rec = HourlyConsumption(
+                installation_id=inst_id,
+                timestamp=dt,
+                raw_grid_import_kwh=2.0,
+                grid_voltage_v=220.0,
+                is_voltage_fallback=False,
+                loss_coefficient=1.03,
+                corrected_grid_import_kwh=2.06,
+                tariff_zone="DAY",
+                day_kwh=2.06,
+                night_kwh=0.0,
+            )
+            db_session.add(rec)
+
+        # Readings at Jan 10, Jan 20, Jan 30
+        for idx, day_offset in enumerate([10, 20, 30], start=2):
+            r = MeterReading(
+                installation_id=inst_id,
+                timestamp=base_dt + timedelta(days=day_offset),
+                day_reading_kwh=10000 + day_offset * 50,
+                night_reading_kwh=5000,
+                is_reference=True,
+            )
+            db_session.add(r)
+        await db_session.commit()
+
+        # 4. Preview with 4 readings -> can_optimize should be True
+        res_prev4 = await client.post(f"/api/installations/{inst_id}/optimize-coefficients")
+        assert res_prev4.status_code == 200
+        data4 = res_prev4.json()
+        assert data4["can_optimize"] is True
+        assert data4["current_readings_count"] == 4
+        assert data4["valid_intervals_count"] == 3
+        assert data4["proposed_coefficients"] is not None
+        assert "loss_base_factor" in data4["proposed_coefficients"]
+
+        # 5. Apply coefficients
+        apply_payload = {
+            "loss_base_factor": data4["proposed_coefficients"]["loss_base_factor"],
+            "avr_idle_loss_kwh": data4["proposed_coefficients"]["avr_idle_loss_kwh"],
+            "loss_voltage_factor": data4["proposed_coefficients"]["loss_voltage_factor"],
+        }
+        res_apply = await client.post(
+            f"/api/installations/{inst_id}/apply-coefficients", json=apply_payload
+        )
+        assert res_apply.status_code == 200
+        apply_data = res_apply.json()
+        assert apply_data["status"] == "success"
+        assert apply_data["updated_records"] == 720
+        assert (
+            apply_data["coefficients"]["loss_base_factor"]
+            == data4["proposed_coefficients"]["loss_base_factor"]
+        )
+
+
+@pytest.mark.asyncio
+async def test_api_reading_timezone_handling(
+    override_db, db_session, sample_installation: Installation
+):
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        # sample_installation has timezone="Europe/Kyiv"
+        # In summer (July), Kyiv is UTC+3.
+        # When entering 15:00:00 local Kyiv time as a naive ISO string from <input type="datetime-local">:
+        res = await client.post(
+            "/api/readings",
+            json={
+                "installation_id": sample_installation.id,
+                "timestamp": "2026-07-01T15:00:00",
+                "day_reading_kwh": 12500,
+                "night_reading_kwh": 6200,
+                "notes": "Summer reading in Kyiv time",
+            },
+        )
+        assert res.status_code == 201
+        data = res.json()
+        # In UTC, 15:00 Kyiv time is 12:00 UTC
+        ts_returned = datetime.fromisoformat(data["timestamp"])
+        assert ts_returned == datetime(2026, 7, 1, 12, 0, 0, tzinfo=timezone.utc)
+
+        # Check HTML view: must render the reading converted back to installation local time (15:00:00)
+        res_html = await client.get(f"/readings?installation_id={sample_installation.id}")
+        assert res_html.status_code == 200
+        assert "Timestamp (Europe/Kyiv)" in res_html.text
+        assert "2026-07-01 15:00:00" in res_html.text
+
+        # Point-in-time calculation with naive local time:
+        res_calc = await client.post(
+            "/api/calculate/meter",
+            json={
+                "installation_id": sample_installation.id,
+                "target_time": "2026-07-01T15:00:00",
+            },
+        )
+        assert res_calc.status_code == 200
+        calc_data = res_calc.json()
+        target_returned = datetime.fromisoformat(calc_data["target_time"])
+        assert target_returned == datetime(2026, 7, 1, 12, 0, 0, tzinfo=timezone.utc)
+
 
 
