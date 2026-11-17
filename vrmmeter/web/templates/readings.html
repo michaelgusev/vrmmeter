@@ -44,6 +44,49 @@
             setTimeout(() => window.location.reload(), 500);
         })
         .catch(err => showToast('Failed to delete: ' + err, 'error'));
+    },
+    isOptimizing: false,
+    isApplying: false,
+    showInsufficientModal: false,
+    showOptimizeModal: false,
+    optResult: null,
+    startOptimization() {
+        const instId = '{{ selected_inst.id if selected_inst else "" }}';
+        if (!instId) {
+            showToast('No installation selected', 'error');
+            return;
+        }
+        this.isOptimizing = true;
+        fetch(`/api/installations/${instId}/optimize-coefficients`, { method: 'POST' })
+        .then(r => r.json())
+        .then(data => {
+            this.optResult = data;
+            if (!data.can_optimize) {
+                this.showInsufficientModal = true;
+            } else {
+                this.showOptimizeModal = true;
+            }
+        })
+        .catch(err => showToast('Failed to calculate optimal coefficients: ' + err, 'error'))
+        .finally(() => this.isOptimizing = false);
+    },
+    confirmApply() {
+        if (!this.optResult || !this.optResult.proposed_coefficients) return;
+        const instId = '{{ selected_inst.id if selected_inst else "" }}';
+        this.isApplying = true;
+        fetch(`/api/installations/${instId}/apply-coefficients`, {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify(this.optResult.proposed_coefficients)
+        })
+        .then(r => r.json())
+        .then(data => {
+            showToast('✓ Loss coefficients saved & historical deltas recalculated');
+            this.showOptimizeModal = false;
+            setTimeout(() => window.location.reload(), 900);
+        })
+        .catch(err => showToast('Failed to apply coefficients: ' + err, 'error'))
+        .finally(() => this.isApplying = false);
     }
 }">
     <!-- Header -->
@@ -57,7 +100,18 @@
                 Calculations for any period are anchored to the last available reading preceding that period.
             </p>
         </div>
-        <div>
+        <div class="flex flex-wrap items-center gap-3">
+            <button @click="startOptimization()" :disabled="isOptimizing"
+                    class="bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white text-sm font-medium px-4 py-2.5 rounded-lg shadow-lg transition flex items-center space-x-2">
+                <span x-show="!isOptimizing" class="flex items-center space-x-1.5">
+                    <span>⚡</span>
+                    <span>Optimize Coefficients</span>
+                </span>
+                <span x-show="isOptimizing" class="flex items-center space-x-2">
+                    <svg class="animate-spin h-4 w-4 text-white" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z"></path></svg>
+                    <span>Calculating...</span>
+                </span>
+            </button>
             <button @click="showAddModal = true"
                     class="bg-emerald-600 hover:bg-emerald-500 text-white text-sm font-medium px-4 py-2.5 rounded-lg shadow-lg transition flex items-center space-x-2">
                 <span>+ Add Reference Reading</span>
@@ -75,7 +129,7 @@
             <table class="min-w-full divide-y divide-slate-700 text-sm text-left">
                 <thead class="bg-slate-900/70 text-slate-400 text-xs font-semibold uppercase">
                     <tr>
-                        <th class="px-6 py-3">Timestamp (UTC / Local)</th>
+                        <th class="px-6 py-3">Timestamp ({{ selected_inst.timezone if selected_inst else 'UTC' }})</th>
                         <th class="px-6 py-3 text-right">☀️ Day Reading (kWh)</th>
                         <th class="px-6 py-3 text-right">🌙 Night Reading (kWh)</th>
                         <th class="px-6 py-3 text-right">Total Counter (kWh)</th>
@@ -87,7 +141,7 @@
                     {% for r in readings %}
                     <tr class="hover:bg-slate-800/50 transition">
                         <td class="px-6 py-3 font-mono text-slate-300">
-                            {{ r.timestamp.strftime('%Y-%m-%d %H:%M:%S') }}
+                            {{ r.timestamp | local_time(selected_inst.timezone if selected_inst else 'UTC') }}
                         </td>
                         <td class="px-6 py-3 text-right font-mono whitespace-nowrap">
                             <div class="inline-flex items-baseline justify-end space-x-2">
@@ -140,7 +194,7 @@
             <div class="space-y-4">
                 <div>
                     <label class="block text-xs font-semibold uppercase tracking-wider text-slate-300 mb-1">
-                        Date & Time of Reading
+                        Date & Time of Reading ({{ selected_inst.timezone if selected_inst else 'Local Time' }})
                     </label>
                     <input type="datetime-local" x-model="timestamp"
                            class="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-white font-mono text-sm focus:ring-emerald-500 focus:border-emerald-500">
@@ -179,6 +233,148 @@
                 <button @click="submitReading()" :disabled="isSubmitting"
                         class="px-5 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-sm font-medium shadow transition">
                     Save Reading
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Insufficient Data Points Modal -->
+    <div x-show="showInsufficientModal" x-cloak class="fixed inset-0 z-50 overflow-y-auto flex items-center justify-center bg-black/70 backdrop-blur-sm p-4">
+        <div @click.away="showInsufficientModal = false" class="bg-slate-900 border border-slate-700 rounded-2xl max-w-md w-full p-6 shadow-2xl space-y-5">
+            <div class="flex items-center space-x-3 text-amber-400 border-b border-slate-800 pb-3">
+                <span class="text-2xl">⚠️</span>
+                <h3 class="text-lg font-bold text-white">Insufficient Reference Readings</h3>
+            </div>
+            
+            <div class="space-y-4 text-sm text-slate-300">
+                <p x-text="optResult?.message || ''" class="leading-relaxed"></p>
+                
+                <div class="bg-slate-800/80 rounded-xl p-4 border border-slate-700/60 space-y-2 text-xs">
+                    <div class="flex justify-between items-center">
+                        <span class="text-slate-400">Current Reference Readings:</span>
+                        <span class="font-mono font-bold text-white" x-text="(optResult?.current_readings_count || 0) + ' / ' + (optResult?.min_readings_required || 4) + ' required'"></span>
+                    </div>
+                    <div class="flex justify-between items-center">
+                        <span class="text-slate-400">Valid Telemetry Intervals:</span>
+                        <span class="font-mono font-bold text-white" x-text="(optResult?.valid_intervals_count || 0) + ' / ' + ((optResult?.min_readings_required || 4) - 1) + ' required'"></span>
+                    </div>
+                </div>
+
+                <p class="text-xs text-slate-400 italic">
+                    The least squares algorithm requires at least 4 manual reference readings across 3 distinct intervals to reliably solve for the 3 system coefficients (K_BASE, K_IDLE, and K_VOLTAGE).
+                </p>
+            </div>
+
+            <div class="flex justify-end pt-3 border-t border-slate-800">
+                <button @click="showInsufficientModal = false"
+                        class="px-5 py-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-white text-sm font-medium transition">
+                    Got it
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Optimization Confirmation Modal -->
+    <div x-show="showOptimizeModal" x-cloak class="fixed inset-0 z-50 overflow-y-auto flex items-center justify-center bg-black/70 backdrop-blur-sm p-4">
+        <div @click.away="showOptimizeModal = false" class="bg-slate-900 border border-slate-700 rounded-2xl max-w-xl w-full p-6 shadow-2xl space-y-5">
+            <div class="flex justify-between items-center border-b border-slate-800 pb-3">
+                <div class="flex items-center space-x-2">
+                    <span class="text-2xl">🎯</span>
+                    <div>
+                        <h3 class="text-lg font-bold text-white">Calibrate Loss Coefficients</h3>
+                        <p class="text-xs text-slate-400">Least squares regression fit to minimize physical meter deltas</p>
+                    </div>
+                </div>
+                <button @click="showOptimizeModal = false" class="text-slate-400 hover:text-white">✕</button>
+            </div>
+
+            <div class="space-y-4">
+                <!-- Comparison Table -->
+                <div class="border border-slate-700/80 rounded-xl overflow-hidden bg-slate-950/50">
+                    <table class="min-w-full text-xs text-left divide-y divide-slate-800">
+                        <thead class="bg-slate-800/80 text-slate-400 font-semibold uppercase">
+                            <tr>
+                                <th class="px-4 py-2.5">Coefficient</th>
+                                <th class="px-4 py-2.5 text-right">Current Value</th>
+                                <th class="px-4 py-2.5 text-right text-emerald-400">Optimized Value</th>
+                            </tr>
+                        </thead>
+                        <tbody class="divide-y divide-slate-800/60 font-mono">
+                            <tr class="hover:bg-slate-800/30">
+                                <td class="px-4 py-2.5 font-sans">
+                                    <div class="font-bold text-white">K_BASE</div>
+                                    <div class="text-[10px] text-slate-400 font-normal">Base Inverter Loss Factor</div>
+                                </td>
+                                <td class="px-4 py-2.5 text-right text-slate-300">
+                                    <span x-text="((optResult?.current_coefficients?.loss_base_factor || 0) * 100).toFixed(2) + '%'"></span>
+                                    <span class="text-slate-500 text-[10px]" x-text="'(' + (optResult?.current_coefficients?.loss_base_factor || 0).toFixed(4) + ')'"></span>
+                                </td>
+                                <td class="px-4 py-2.5 text-right text-emerald-300 font-bold">
+                                    <span x-text="((optResult?.proposed_coefficients?.loss_base_factor || 0) * 100).toFixed(2) + '%'"></span>
+                                    <span class="text-emerald-500/80 text-[10px]" x-text="'(' + (optResult?.proposed_coefficients?.loss_base_factor || 0).toFixed(4) + ')'"></span>
+                                </td>
+                            </tr>
+                            <tr class="hover:bg-slate-800/30">
+                                <td class="px-4 py-2.5 font-sans">
+                                    <div class="font-bold text-white">K_IDLE</div>
+                                    <div class="text-[10px] text-slate-400 font-normal">Hourly AVR Standby Draw</div>
+                                </td>
+                                <td class="px-4 py-2.5 text-right text-slate-300">
+                                    <span x-text="(optResult?.current_coefficients?.avr_idle_loss_kwh || 0).toFixed(4) + ' kWh/h'"></span>
+                                </td>
+                                <td class="px-4 py-2.5 text-right text-emerald-300 font-bold">
+                                    <span x-text="(optResult?.proposed_coefficients?.avr_idle_loss_kwh || 0).toFixed(4) + ' kWh/h'"></span>
+                                </td>
+                            </tr>
+                            <tr class="hover:bg-slate-800/30">
+                                <td class="px-4 py-2.5 font-sans">
+                                    <div class="font-bold text-white">K_VOLTAGE</div>
+                                    <div class="text-[10px] text-slate-400 font-normal">Voltage Deviation Sensitivity</div>
+                                </td>
+                                <td class="px-4 py-2.5 text-right text-slate-300">
+                                    <span x-text="(optResult?.current_coefficients?.loss_voltage_factor || 0).toFixed(4)"></span>
+                                </td>
+                                <td class="px-4 py-2.5 text-right text-emerald-300 font-bold">
+                                    <span x-text="(optResult?.proposed_coefficients?.loss_voltage_factor || 0).toFixed(4)"></span>
+                                </td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+
+                <!-- Improvement Stats Card -->
+                <div class="bg-indigo-950/40 border border-indigo-800/50 rounded-xl p-3.5 flex items-center justify-between text-xs">
+                    <div>
+                        <div class="text-indigo-200 font-semibold">Total Delta Error Reduction</div>
+                        <div class="text-slate-400 text-[11px] mt-0.5">
+                            RMSE: <span class="font-mono text-slate-300" x-text="(optResult?.rmse_before || 0).toFixed(2) + ' kWh'"></span>
+                            ➔ <span class="font-mono text-emerald-300 font-bold" x-text="(optResult?.rmse_after || 0).toFixed(2) + ' kWh'"></span>
+                        </div>
+                    </div>
+                    <div class="text-right">
+                        <span class="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-bold bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 font-mono">
+                            <span x-text="'-' + (optResult?.improvement_percent || 0).toFixed(1) + '% SSE'"></span>
+                        </span>
+                    </div>
+                </div>
+
+                <p class="text-xs text-slate-400">
+                    Confirming will update installation settings and recalculate historical hourly losses and reference reading deltas.
+                </p>
+            </div>
+
+            <div class="flex justify-end space-x-3 pt-3 border-t border-slate-800">
+                <button @click="showOptimizeModal = false" :disabled="isApplying"
+                        class="px-4 py-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 text-sm font-medium">
+                    Cancel
+                </button>
+                <button @click="confirmApply()" :disabled="isApplying"
+                        class="px-5 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-sm font-medium shadow transition flex items-center space-x-2">
+                    <span x-show="!isApplying">✓ Apply & Recalculate Deltas</span>
+                    <span x-show="isApplying" class="flex items-center space-x-2">
+                        <svg class="animate-spin h-4 w-4 text-white" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z"></path></svg>
+                        <span>Saving & Recalculating...</span>
+                    </span>
                 </button>
             </div>
         </div>

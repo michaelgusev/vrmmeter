@@ -1,5 +1,6 @@
 from datetime import date, datetime, timezone
 from typing import List, Optional
+import zoneinfo
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, status
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -15,16 +16,20 @@ from vrmmeter.db.models import (
 )
 from vrmmeter.db.session import get_db
 from vrmmeter.schemas import (
+    ApplyCoefficientsRequest,
+    ApplyCoefficientsResponse,
     ElectricityPriceCreate,
     ElectricityPriceOut,
     InstallationCreate,
     InstallationOut,
     InstallationUpdate,
+    LossCoefficients,
     MeterCalculationRequest,
     MeterCalculationResponse,
     MeterReadingCreate,
     MeterReadingOut,
     MonthlyReportResponse,
+    OptimizationPreviewResponse,
     SyncRequest,
     SyncResponse,
     SystemSettingOut,
@@ -45,6 +50,10 @@ from vrmmeter.services.installer_importer import (
     get_stored_vrm_token,
 )
 from vrmmeter.services.loss_model import recalculate_installation_losses
+from vrmmeter.services.optimizer import (
+    apply_optimal_coefficients,
+    calculate_optimal_coefficients,
+)
 from vrmmeter.services.sync_service import sync_all_active_installations, sync_installation
 from vrmmeter.services.telemetry_service import ingest_telemetry_batch, parse_and_ingest_csv
 from vrmmeter.services.vrm_client import get_vrm_client
@@ -361,9 +370,24 @@ async def list_meter_readings(
 async def create_meter_reading(
     payload: MeterReadingCreate, session: AsyncSession = Depends(get_db)
 ):
+    inst_stmt = select(Installation).where(Installation.id == payload.installation_id)
+    inst_res = await session.execute(inst_stmt)
+    inst = inst_res.scalar_one_or_none()
+    if not inst:
+        raise HTTPException(status_code=404, detail="Installation not found")
+
+    if payload.timestamp.tzinfo is None:
+        try:
+            inst_tz = zoneinfo.ZoneInfo(inst.timezone)
+        except Exception:
+            inst_tz = timezone.utc
+        ts_utc = payload.timestamp.replace(tzinfo=inst_tz).astimezone(timezone.utc)
+    else:
+        ts_utc = payload.timestamp.astimezone(timezone.utc)
+
     reading = MeterReading(
         installation_id=payload.installation_id,
-        timestamp=payload.timestamp if payload.timestamp.tzinfo else payload.timestamp.replace(tzinfo=timezone.utc),
+        timestamp=ts_utc,
         day_reading_kwh=payload.day_reading_kwh,
         night_reading_kwh=payload.night_reading_kwh,
         zone_readings=payload.zone_readings,
@@ -385,6 +409,87 @@ async def delete_meter_reading(reading_id: int, session: AsyncSession = Depends(
         raise HTTPException(status_code=404, detail="Meter reading not found")
     await session.delete(reading)
     await session.commit()
+
+
+# --- Loss Coefficient Least Squares Optimization ---
+@api_router.post(
+    "/installations/{inst_id}/optimize-coefficients",
+    response_model=OptimizationPreviewResponse,
+)
+async def preview_coefficient_optimization(
+    inst_id: str, session: AsyncSession = Depends(get_db)
+):
+    stmt = select(Installation).where(Installation.id == inst_id)
+    res = await session.execute(stmt)
+    inst = res.scalar_one_or_none()
+    if not inst:
+        raise HTTPException(status_code=404, detail="Installation not found")
+
+    metrics = await calculate_optimal_coefficients(session, inst)
+    current_coeffs = LossCoefficients(
+        loss_base_factor=metrics.current_k_base,
+        avr_idle_loss_kwh=metrics.current_k_idle,
+        loss_voltage_factor=metrics.current_k_voltage,
+    )
+    proposed_coeffs = (
+        LossCoefficients(
+            loss_base_factor=metrics.proposed_k_base,
+            avr_idle_loss_kwh=metrics.proposed_k_idle,
+            loss_voltage_factor=metrics.proposed_k_voltage,
+        )
+        if metrics.can_optimize
+        else None
+    )
+
+    return OptimizationPreviewResponse(
+        can_optimize=metrics.can_optimize,
+        message=metrics.message,
+        min_readings_required=metrics.min_readings_required,
+        current_readings_count=metrics.current_readings_count,
+        valid_intervals_count=metrics.valid_intervals_count,
+        current_coefficients=current_coeffs,
+        proposed_coefficients=proposed_coeffs,
+        sse_before=metrics.sse_before if metrics.can_optimize else None,
+        sse_after=metrics.sse_after if metrics.can_optimize else None,
+        rmse_before=metrics.rmse_before if metrics.can_optimize else None,
+        rmse_after=metrics.rmse_after if metrics.can_optimize else None,
+        improvement_percent=metrics.improvement_percent if metrics.can_optimize else None,
+    )
+
+
+@api_router.post(
+    "/installations/{inst_id}/apply-coefficients",
+    response_model=ApplyCoefficientsResponse,
+)
+async def apply_coefficients_endpoint(
+    inst_id: str,
+    payload: ApplyCoefficientsRequest,
+    session: AsyncSession = Depends(get_db),
+):
+    stmt = select(Installation).where(Installation.id == inst_id)
+    res = await session.execute(stmt)
+    inst = res.scalar_one_or_none()
+    if not inst:
+        raise HTTPException(status_code=404, detail="Installation not found")
+
+    updated_records = await apply_optimal_coefficients(
+        session=session,
+        installation=inst,
+        loss_base_factor=payload.loss_base_factor,
+        avr_idle_loss_kwh=payload.avr_idle_loss_kwh,
+        loss_voltage_factor=payload.loss_voltage_factor,
+    )
+
+    return ApplyCoefficientsResponse(
+        status="success",
+        message="Coefficients applied successfully and historical consumption recalculated.",
+        updated_records=updated_records,
+        coefficients=LossCoefficients(
+            loss_base_factor=inst.loss_base_factor,
+            avr_idle_loss_kwh=inst.avr_idle_loss_kwh,
+            loss_voltage_factor=inst.loss_voltage_factor,
+        ),
+    )
 
 
 # --- Telemetry Ingestion ---
@@ -436,10 +541,26 @@ async def upload_telemetry_csv(
 async def calculate_meter(
     payload: MeterCalculationRequest, session: AsyncSession = Depends(get_db)
 ):
+    target_dt = payload.target_time
+    if target_dt.tzinfo is None:
+        inst_stmt = select(Installation).where(Installation.id == payload.installation_id)
+        inst_res = await session.execute(inst_stmt)
+        inst = inst_res.scalar_one_or_none()
+        if inst:
+            try:
+                inst_tz = zoneinfo.ZoneInfo(inst.timezone)
+            except Exception:
+                inst_tz = timezone.utc
+            target_dt = target_dt.replace(tzinfo=inst_tz).astimezone(timezone.utc)
+        else:
+            target_dt = target_dt.replace(tzinfo=timezone.utc)
+    else:
+        target_dt = target_dt.astimezone(timezone.utc)
+
     return await estimate_meter_reading(
         session=session,
         installation_id=payload.installation_id,
-        target_time=payload.target_time,
+        target_time=target_dt,
     )
 
 

@@ -275,3 +275,39 @@ class SyncResponse(BaseModel):
     status: str
     message: str
     records_synced: int
+
+
+# --- Coefficient Optimization Schemas ---
+class LossCoefficients(BaseModel):
+    loss_base_factor: float
+    avr_idle_loss_kwh: float
+    loss_voltage_factor: float
+
+
+class OptimizationPreviewResponse(BaseModel):
+    can_optimize: bool
+    message: str
+    min_readings_required: int
+    current_readings_count: int
+    valid_intervals_count: int
+    current_coefficients: Optional[LossCoefficients] = None
+    proposed_coefficients: Optional[LossCoefficients] = None
+    sse_before: Optional[float] = None
+    sse_after: Optional[float] = None
+    rmse_before: Optional[float] = None
+    rmse_after: Optional[float] = None
+    improvement_percent: Optional[float] = None
+
+
+class ApplyCoefficientsRequest(BaseModel):
+    loss_base_factor: float = Field(..., ge=0.0, le=0.50)
+    avr_idle_loss_kwh: float = Field(..., ge=0.0, le=0.50)
+    loss_voltage_factor: float = Field(..., ge=0.0, le=1.00)
+
+
+class ApplyCoefficientsResponse(BaseModel):
+    status: str
+    message: str
+    updated_records: int
+    coefficients: LossCoefficients
+
